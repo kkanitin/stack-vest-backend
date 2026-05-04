@@ -33,3 +33,7 @@ config.yml
 # Editor/IDE
 .idea/
 # .vscode/
+
+# AI Agents
+.junie
+.claude
