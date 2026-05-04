@@ -5,11 +5,13 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 )
 
-func New() *gin.Engine {
+func New(stockHandler *handler.StockHandler) *gin.Engine {
 	r := gin.Default()
 
-	health := handler.NewHealthHandler()
-	r.GET("/ping", health.Ping)
+	r.GET("/ping", handler.NewHealthHandler().Ping)
+
+	v1 := r.Group("/api/v1")
+	stockHandler.RegisterRoutes(v1)
 
 	return r
 }
