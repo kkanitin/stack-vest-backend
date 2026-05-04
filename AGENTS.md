@@ -64,6 +64,8 @@ pkg/
 `router.go` stays thin — it only calls each handler's `RegisterRoutes`. Never inline route registration inside
 `router.go`.
 
+**API response convention:** all JSON response fields use `lowerCamelCase` (e.g. `marketOpen`, `matchScore`). Apply this to all `json:"..."` struct tags.
+
 **Key dependencies:**
 
 - `gin-gonic/gin` — HTTP routing and middleware
