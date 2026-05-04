@@ -5,7 +5,7 @@ Architecture principles.
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.26.2+
 - MongoDB
 
 ## Getting Started
