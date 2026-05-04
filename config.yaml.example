@@ -1,0 +1,8 @@
+server:
+  port: ""
+db:
+  mongo:
+    uri: ""
+third_party_api:
+  alpha_vantage:
+    api_key: ""

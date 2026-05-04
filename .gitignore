@@ -2,6 +2,7 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+backend
 *.exe
 *.exe~
 *.dll
@@ -26,7 +27,13 @@ go.work.sum
 
 # env file
 .env
+config.yaml
+config.yml
 
 # Editor/IDE
-# .idea/
+.idea/
 # .vscode/
+
+# AI Agents
+.junie
+.claude
