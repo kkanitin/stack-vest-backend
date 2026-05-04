@@ -8,7 +8,7 @@ import (
 func New(stockHandler *handler.StockHandler) *gin.Engine {
 	r := gin.Default()
 
-	r.GET("/ping", handler.NewHealthHandler().Ping)
+	r.GET("/health", handler.NewHealthHandler().HealthCheck)
 
 	v1 := r.Group("/api/v1")
 	stockHandler.RegisterRoutes(v1)
