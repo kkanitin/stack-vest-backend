@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,7 @@ func (h *StockHandler) Search(c *gin.Context) {
 
 	results, err := h.searchUC.Execute(q)
 	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "stock search failed", "keywords", q, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search stocks"})
 		return
 	}

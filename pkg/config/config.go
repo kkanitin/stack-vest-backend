@@ -10,11 +10,26 @@ type Config struct {
 	Server struct {
 		Port string `yaml:"port"`
 	} `yaml:"server"`
+	Log struct {
+		Level  string `yaml:"level"`
+		Format string `yaml:"format"`
+	} `yaml:"log"`
 	DB struct {
 		Mongo struct {
-			URI string `yaml:"uri"`
+			URI  string `yaml:"uri"`
+			Name string `yaml:"name"`
 		} `yaml:"mongo"`
 	} `yaml:"db"`
+	Auth struct {
+		Google struct {
+			ClientID     string `yaml:"client_id"`
+			ClientSecret string `yaml:"client_secret"`
+			RedirectURL  string `yaml:"redirect_url"`
+		} `yaml:"google"`
+		JWT struct {
+			Secret string `yaml:"secret"`
+		} `yaml:"jwt"`
+	} `yaml:"auth"`
 	ThirdPartyAPI struct {
 		AlphaVantage struct {
 			APIKey string `yaml:"api_key"`
@@ -25,6 +40,8 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{}
 	cfg.Server.Port = "8080"
+	cfg.Log.Level = "info"
+	cfg.Log.Format = "json"
 
 	if data, err := os.ReadFile("config.yaml"); err == nil {
 		_ = yaml.Unmarshal(data, cfg)
@@ -39,6 +56,24 @@ func Load() *Config {
 	}
 	if key := os.Getenv("ALPHA_VANTAGE_API_KEY"); key != "" {
 		cfg.ThirdPartyAPI.AlphaVantage.APIKey = key
+	}
+	if v := os.Getenv("GOOGLE_CLIENT_ID"); v != "" {
+		cfg.Auth.Google.ClientID = v
+	}
+	if v := os.Getenv("GOOGLE_CLIENT_SECRET"); v != "" {
+		cfg.Auth.Google.ClientSecret = v
+	}
+	if v := os.Getenv("GOOGLE_REDIRECT_URL"); v != "" {
+		cfg.Auth.Google.RedirectURL = v
+	}
+	if v := os.Getenv("JWT_SECRET"); v != "" {
+		cfg.Auth.JWT.Secret = v
+	}
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		cfg.Log.Level = v
+	}
+	if v := os.Getenv("LOG_FORMAT"); v != "" {
+		cfg.Log.Format = v
 	}
 
 	return cfg

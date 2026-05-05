@@ -51,6 +51,10 @@ pkg/
   database/             — MongoDB client setup
 ```
 
+**Config file rule:** whenever `config.yaml` is modified (keys added, renamed, or removed), `config.yaml.example` must be updated in the same change. `config.yaml` is git-ignored; `config.yaml.example` is the committed reference that other developers copy to get started.
+
+**NEVER put real secrets in `config.yaml.example`** — no real API keys, passwords, tokens, or credentials of any kind. Use descriptive placeholders only (e.g. `"YOUR_ALPHA_VANTAGE_API_KEY"`, `"YOUR_JWT_SECRET_CHANGE_ME"`). `config.yaml.example` is committed to the repository and publicly visible.
+
 **Adding a feature** (e.g. `user`):
 
 1. `internal/domain/` — define entity struct + repository interface
@@ -65,6 +69,42 @@ pkg/
 `router.go`.
 
 **API response convention:** all JSON response fields use `lowerCamelCase` (e.g. `marketOpen`, `matchScore`). Apply this to all `json:"..."` struct tags.
+
+## Logging
+
+**Package:** `pkg/logger` wraps Go's standard `log/slog`. `main.go` calls `slog.SetDefault` once at startup so all code can use the package-level `slog.Info/Warn/Error/Debug` functions without carrying a logger reference.
+
+**Configuration** (env vars or `config.yaml`):
+
+| Env var | `config.yaml` key | Default | Values |
+|---|---|---|---|
+| `LOG_LEVEL` | `log.level` | `info` | `debug`, `info`, `warn`, `error` |
+| `LOG_FORMAT` | `log.format` | `json` | `json`, `text` |
+
+Use `text` locally for human-readable output; keep `json` in staging/production for log aggregators.
+
+**Where to log:**
+
+- **Errors only at the handler layer.** Use `slog.ErrorContext(c.Request.Context(), "short description", "error", err)`. Do not log the same error at multiple layers — wrap it with `fmt.Errorf` up the call chain, then log once at the top.
+- **Do not log in use-case or repository layers** unless the error is swallowed (not returned). If an error is returned to the caller, the caller logs it.
+- **HTTP requests** are logged automatically by `middleware.Logger` (method, path, status, latency, client IP). Do not duplicate request/response logging in handlers.
+- **Startup events** (server starting, DB connected) go in `main.go` with `slog.Info`.
+
+**Attribute conventions:**
+
+```go
+// Preferred: typed helpers
+slog.ErrorContext(ctx, "payment failed", "orderID", id, "error", err)
+slog.InfoContext(ctx, "user upserted", "userID", user.ID)
+
+// Use slog.ErrorContext / slog.WarnContext / slog.InfoContext / slog.DebugContext
+// (context-aware forms) inside handlers. Use slog.Error etc. in main.go where
+// no context is available.
+```
+
+- Key names: `lowerCamelCase` (`userID`, `orderID`, `error`).
+- Always include `"error", err` for error logs.
+- Never log secrets, tokens, passwords, or PII.
 
 **Key dependencies:**
 
