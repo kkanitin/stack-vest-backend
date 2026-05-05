@@ -51,6 +51,8 @@ pkg/
   database/             — MongoDB client setup
 ```
 
+**Graceful shutdown rule:** every resource that holds a connection or runs a background process (e.g. Redis, message queue consumer, background worker) must register a cleanup func in the `runUntilShutdown` call in `main.go`. Each func receives a context with a 10-second deadline and is called in the order listed. Never leave a resource unregistered — unclean shutdowns cause connection leaks and data loss.
+
 **Config file rule:** whenever `config.yaml` is modified (keys added, renamed, or removed), `config.yaml.example` must be updated in the same change. `config.yaml` is git-ignored; `config.yaml.example` is the committed reference that other developers copy to get started.
 
 **NEVER put real secrets in `config.yaml.example`** — no real API keys, passwords, tokens, or credentials of any kind. Use descriptive placeholders only (e.g. `"YOUR_ALPHA_VANTAGE_API_KEY"`, `"YOUR_JWT_SECRET_CHANGE_ME"`). `config.yaml.example` is committed to the repository and publicly visible.

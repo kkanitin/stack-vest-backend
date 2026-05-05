@@ -61,6 +61,9 @@ func main() {
 		Handler: r,
 	}
 
+	// Register a cleanup func for every resource that needs a graceful shutdown
+	// (e.g. Redis, message queue consumer, background workers). Each func receives
+	// a context with a 10-second deadline and is called in the order listed.
 	runUntilShutdown(srv,
 		func(ctx context.Context) {
 			if err := mongoClient.Disconnect(ctx); err != nil {
