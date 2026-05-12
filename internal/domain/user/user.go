@@ -2,17 +2,20 @@ package user
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
+var ErrNotFound = errors.New("user not found")
+
 type User struct {
-	ID        string    `bson:"_id,omitempty" json:"id"`
-	GoogleID  string    `bson:"googleId" json:"googleId"`
-	Email     string    `bson:"email" json:"email"`
-	Name      string    `bson:"name" json:"name"`
-	Picture   string    `bson:"picture" json:"picture"`
-	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`
-	UpdatedAt time.Time `bson:"updatedAt" json:"updatedAt"`
+	ID        string    `json:"id"`
+	GoogleID  string    `json:"googleId"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	Picture   string    `json:"picture"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type Repository interface {

@@ -29,23 +29,22 @@ func main() {
 
 	slog.Info("starting StackVest backend", "port", cfg.Server.Port)
 
-	mongoClient, err := database.NewMongoClient(cfg.DB.Mongo.URI)
+	pool, err := database.NewPostgresPool(context.Background(), cfg.DB.Postgres.DSN)
 	if err != nil {
-		slog.Error("failed to connect to MongoDB", "error", err)
+		slog.Error("failed to connect to PostgreSQL", "error", err)
 		os.Exit(1)
 	}
 
-	dbName := cfg.DB.Mongo.Name
-	if dbName == "" {
-		dbName = "stackvest"
+	userRepo := userrepo.NewPostgresRepository(pool)
+	if err := userRepo.Migrate(context.Background()); err != nil {
+		slog.Error("failed to run migrations", "error", err)
+		os.Exit(1)
 	}
-	db := database.NewDatabase(mongoClient, dbName)
 
 	avClient := alphavantage.NewClient(cfg.ThirdPartyAPI.AlphaVantage.APIKey)
 	searchUC := stockuc.NewSearchUseCase(avClient)
 	stockHandler := handler.NewStockHandler(searchUC)
 
-	userRepo := userrepo.NewMongoRepository(db)
 	googleUC := authuc.NewGoogleUseCase(
 		cfg.Auth.Google.ClientID,
 		cfg.Auth.Google.ClientSecret,
@@ -61,14 +60,9 @@ func main() {
 		Handler: r,
 	}
 
-	// Register a cleanup func for every resource that needs a graceful shutdown
-	// (e.g. Redis, message queue consumer, background workers). Each func receives
-	// a context with a 10-second deadline and is called in the order listed.
 	runUntilShutdown(srv,
-		func(ctx context.Context) {
-			if err := mongoClient.Disconnect(ctx); err != nil {
-				slog.Error("failed to disconnect MongoDB", "error", err)
-			}
+		func(_ context.Context) {
+			pool.Close()
 		},
 	)
 }

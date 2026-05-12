@@ -26,10 +26,9 @@ The server starts on `:8080` by default.
 
 See [AGENTS.md](./AGENTS.md#environment-variables) for the full list. Key ones:
 
-| Variable       | Default | Description            |
-|----------------|---------|------------------------|
-| `SERVER_PORT`  | `8080`  | HTTP listen port       |
-| `DB_MONGO_URI` | —       | MongoDB connection URI |
+| Variable      | Default | Description      |
+|---------------|---------|------------------|
+| `SERVER_PORT` | `8080`  | HTTP listen port |
 
 ## Project Structure
 

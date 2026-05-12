@@ -15,10 +15,9 @@ type Config struct {
 		Format string `yaml:"format"`
 	} `yaml:"log"`
 	DB struct {
-		Mongo struct {
-			URI  string `yaml:"uri"`
-			Name string `yaml:"name"`
-		} `yaml:"mongo"`
+		Postgres struct {
+			DSN string `yaml:"dsn"`
+		} `yaml:"postgres"`
 	} `yaml:"db"`
 	Auth struct {
 		Google struct {
@@ -57,11 +56,8 @@ func Load() *Config {
 	if v := os.Getenv("LOG_FORMAT"); v != "" {
 		cfg.Log.Format = v
 	}
-	if v := os.Getenv("DB_MONGO_URI"); v != "" {
-		cfg.DB.Mongo.URI = v
-	}
-	if v := os.Getenv("DB_MONGO_NAME"); v != "" {
-		cfg.DB.Mongo.Name = v
+	if v := os.Getenv("DB_POSTGRES_DSN"); v != "" {
+		cfg.DB.Postgres.DSN = v
 	}
 	if v := os.Getenv("AUTH_GOOGLE_CLIENT_ID"); v != "" {
 		cfg.Auth.Google.ClientID = v

@@ -48,7 +48,7 @@ internal/
 
 pkg/
   config/               — Config from config.yaml with env var overrides (see Environment Variables below)
-  database/             — MongoDB client setup
+  database/             — PostgreSQL connection pool setup
 ```
 
 **Graceful shutdown rule:** every resource that holds a connection or runs a background process (e.g. Redis, message queue consumer, background worker) must register a cleanup func in the `runUntilShutdown` call in `main.go`. Each func receives a context with a 10-second deadline and is called in the order listed. Never leave a resource unregistered — unclean shutdowns cause connection leaks and data loss.
@@ -82,8 +82,7 @@ All config values can be overridden at runtime via environment variables. The na
 | `SERVER_PORT`                           | `server.port`                           | `8080`  |
 | `LOG_LEVEL`                             | `log.level`                             | `info`  |
 | `LOG_FORMAT`                            | `log.format`                            | `json`  |
-| `DB_MONGO_URI`                          | `db.mongo.uri`                          | —       |
-| `DB_MONGO_NAME`                         | `db.mongo.name`                         | —       |
+| `DB_POSTGRES_DSN`                       | `db.postgres.dsn`                       | —       |
 | `AUTH_GOOGLE_CLIENT_ID`                 | `auth.google.client_id`                 | —       |
 | `AUTH_GOOGLE_CLIENT_SECRET`             | `auth.google.client_secret`             | —       |
 | `AUTH_GOOGLE_REDIRECT_URL`              | `auth.google.redirect_url`              | —       |
