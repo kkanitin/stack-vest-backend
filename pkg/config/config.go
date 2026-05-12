@@ -47,33 +47,36 @@ func Load() *Config {
 		_ = yaml.Unmarshal(data, cfg)
 	}
 
-	// Environment variable overrides
-	if port := os.Getenv("SERVER_PORT"); port != "" {
-		cfg.Server.Port = port
-	}
-	if uri := os.Getenv("MONGO_URI"); uri != "" {
-		cfg.DB.Mongo.URI = uri
-	}
-	if key := os.Getenv("ALPHA_VANTAGE_API_KEY"); key != "" {
-		cfg.ThirdPartyAPI.AlphaVantage.APIKey = key
-	}
-	if v := os.Getenv("GOOGLE_CLIENT_ID"); v != "" {
-		cfg.Auth.Google.ClientID = v
-	}
-	if v := os.Getenv("GOOGLE_CLIENT_SECRET"); v != "" {
-		cfg.Auth.Google.ClientSecret = v
-	}
-	if v := os.Getenv("GOOGLE_REDIRECT_URL"); v != "" {
-		cfg.Auth.Google.RedirectURL = v
-	}
-	if v := os.Getenv("JWT_SECRET"); v != "" {
-		cfg.Auth.JWT.Secret = v
+	// Environment variable overrides — name = config path uppercased with dots replaced by underscores
+	if v := os.Getenv("SERVER_PORT"); v != "" {
+		cfg.Server.Port = v
 	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
 	if v := os.Getenv("LOG_FORMAT"); v != "" {
 		cfg.Log.Format = v
+	}
+	if v := os.Getenv("DB_MONGO_URI"); v != "" {
+		cfg.DB.Mongo.URI = v
+	}
+	if v := os.Getenv("DB_MONGO_NAME"); v != "" {
+		cfg.DB.Mongo.Name = v
+	}
+	if v := os.Getenv("AUTH_GOOGLE_CLIENT_ID"); v != "" {
+		cfg.Auth.Google.ClientID = v
+	}
+	if v := os.Getenv("AUTH_GOOGLE_CLIENT_SECRET"); v != "" {
+		cfg.Auth.Google.ClientSecret = v
+	}
+	if v := os.Getenv("AUTH_GOOGLE_REDIRECT_URL"); v != "" {
+		cfg.Auth.Google.RedirectURL = v
+	}
+	if v := os.Getenv("AUTH_JWT_SECRET"); v != "" {
+		cfg.Auth.JWT.Secret = v
+	}
+	if v := os.Getenv("THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY"); v != "" {
+		cfg.ThirdPartyAPI.AlphaVantage.APIKey = v
 	}
 
 	return cfg

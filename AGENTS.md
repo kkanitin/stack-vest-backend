@@ -47,7 +47,7 @@ internal/
     middleware/         — Auth, logging, and other Gin middleware
 
 pkg/
-  config/               — Config from config.yaml and Env (SERVER_PORT, MONGO_URI)
+  config/               — Config from config.yaml with env var overrides (see Environment Variables below)
   database/             — MongoDB client setup
 ```
 
@@ -71,6 +71,27 @@ pkg/
 `router.go`.
 
 **API response convention:** all JSON response fields use `lowerCamelCase` (e.g. `marketOpen`, `matchScore`). Apply this to all `json:"..."` struct tags.
+
+## Environment Variables
+
+All config values can be overridden at runtime via environment variables. The naming rule is:
+**config path → uppercase, dots replaced by underscores** (e.g. `auth.google.client_id` → `AUTH_GOOGLE_CLIENT_ID`).
+
+| Env var                                 | `config.yaml` key                       | Default |
+|-----------------------------------------|-----------------------------------------|---------|
+| `SERVER_PORT`                           | `server.port`                           | `8080`  |
+| `LOG_LEVEL`                             | `log.level`                             | `info`  |
+| `LOG_FORMAT`                            | `log.format`                            | `json`  |
+| `DB_MONGO_URI`                          | `db.mongo.uri`                          | —       |
+| `DB_MONGO_NAME`                         | `db.mongo.name`                         | —       |
+| `AUTH_GOOGLE_CLIENT_ID`                 | `auth.google.client_id`                 | —       |
+| `AUTH_GOOGLE_CLIENT_SECRET`             | `auth.google.client_secret`             | —       |
+| `AUTH_GOOGLE_REDIRECT_URL`              | `auth.google.redirect_url`              | —       |
+| `AUTH_JWT_SECRET`                       | `auth.jwt.secret`                       | —       |
+| `THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY` | `third_party_api.alpha_vantage.api_key` | —       |
+
+Env vars take precedence over `config.yaml`. In production, set secrets via env vars and omit them from `config.yaml`
+entirely.
 
 ## Logging
 

@@ -47,9 +47,9 @@ third_party_api:
 
 	// Test environment variable override
 	os.Setenv("SERVER_PORT", "9999")
-	os.Setenv("ALPHA_VANTAGE_API_KEY", "env-key")
+	os.Setenv("THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY", "env-key")
 	defer os.Unsetenv("SERVER_PORT")
-	defer os.Unsetenv("ALPHA_VANTAGE_API_KEY")
+	defer os.Unsetenv("THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY")
 
 	cfg = Load()
 	if cfg.Server.Port != "9999" {
