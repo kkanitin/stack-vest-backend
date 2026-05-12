@@ -6,9 +6,8 @@ log:
   format: "json"      # json | text
 
 db:
-  mongo:
-    uri: "mongodb://localhost:27017"
-    name: "stackvest"
+  postgres:
+    dsn: "postgres://user:password@localhost:5432/stackvest?sslmode=disable"
 
 auth:
   google:

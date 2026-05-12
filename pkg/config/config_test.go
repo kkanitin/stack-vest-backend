@@ -10,9 +10,6 @@ func TestLoad(t *testing.T) {
 	content := []byte(`
 server:
   port: "9090"
-db:
-  mongo:
-    uri: "mongodb://test:27017"
 third_party_api:
   alpha_vantage:
     api_key: "test-key"
@@ -37,9 +34,6 @@ third_party_api:
 	cfg := Load()
 	if cfg.Server.Port != "9090" {
 		t.Errorf("expected 9090, got %s", cfg.Server.Port)
-	}
-	if cfg.DB.Mongo.URI != "mongodb://test:27017" {
-		t.Errorf("expected mongodb://test:27017, got %s", cfg.DB.Mongo.URI)
 	}
 	if cfg.ThirdPartyAPI.AlphaVantage.APIKey != "test-key" {
 		t.Errorf("expected test-key, got %s", cfg.ThirdPartyAPI.AlphaVantage.APIKey)
