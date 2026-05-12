@@ -30,6 +30,9 @@ go.work.sum
 config.yaml
 config.yml
 
+# local docker compose (contains sensitive paths)
+docker-compose-local.yaml
+
 # Editor/IDE
 .idea/
 # .vscode/

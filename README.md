@@ -5,7 +5,7 @@ Architecture principles.
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.26.2+
 - MongoDB
 
 ## Getting Started
@@ -24,10 +24,12 @@ The server starts on `:8080` by default.
 
 ## Environment Variables
 
-| Variable         | Default | Description            |
-|------------------|---------|------------------------|
-| `SERVER_ADDRESS` | `:8080` | HTTP listen address    |
-| `MONGO_URI`      | —       | MongoDB connection URI |
+See [AGENTS.md](./AGENTS.md#environment-variables) for the full list. Key ones:
+
+| Variable       | Default | Description            |
+|----------------|---------|------------------------|
+| `SERVER_PORT`  | `8080`  | HTTP listen port       |
+| `DB_MONGO_URI` | —       | MongoDB connection URI |
 
 ## Project Structure
 
