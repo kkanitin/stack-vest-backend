@@ -8,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 )
 
@@ -25,10 +24,6 @@ func (h *AuthHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	auth := rg.Group("/auth")
 	auth.GET("/google", h.googleLogin)
 	auth.GET("/google/callback", h.googleCallback)
-
-	// TODO: delete this test endpoint after auth flow is verified
-	protected := auth.Group("", middleware.Auth(h.jwtSecret))
-	protected.GET("/me", h.me)
 }
 
 // googleLogin redirects the browser to the Google OAuth consent page.
@@ -69,12 +64,4 @@ func (h *AuthHandler) googleCallback(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"token": signed, "user": user})
-}
-
-// me returns the JWT claims of the authenticated user.
-// TODO: delete this test endpoint after auth flow is verified
-func (h *AuthHandler) me(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"userId": c.GetString(middleware.UserIDKey),
-	})
 }
