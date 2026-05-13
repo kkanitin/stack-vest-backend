@@ -53,7 +53,7 @@ func main() {
 	)
 	authHandler := handler.NewAuthHandler(googleUC, cfg.Auth.JWT.Secret)
 
-	r := router.New(stockHandler, authHandler, log)
+	r := router.New(stockHandler, authHandler, cfg.Auth.JWT.Secret, log)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,

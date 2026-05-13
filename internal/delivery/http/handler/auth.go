@@ -31,11 +31,11 @@ func (h *AuthHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	protected.GET("/me", h.me)
 }
 
-// googleLogin returns the Google OAuth consent URL for the client to redirect to.
+// googleLogin redirects the browser to the Google OAuth consent page.
 func (h *AuthHandler) googleLogin(c *gin.Context) {
 	// TODO: replace with a per-request random state stored in a short-lived cookie for CSRF protection
 	state := "stackvest-oauth-state"
-	c.JSON(http.StatusOK, gin.H{"url": h.googleUC.GetAuthURL(state)})
+	c.Redirect(http.StatusTemporaryRedirect, h.googleUC.GetAuthURL(state))
 }
 
 // googleCallback handles the redirect from Google, exchanges the code for a JWT.
