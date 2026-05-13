@@ -26,15 +26,15 @@ func (h *StockHandler) RegisterRoutes(rg *gin.RouterGroup) {
 }
 
 func (h *StockHandler) Search(c *gin.Context) {
-	q := c.Query("q")
-	if q == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "query parameter 'q' is required"})
+	keywords := c.Query("keywords")
+	if keywords == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "query parameter 'keywords' is required"})
 		return
 	}
 
-	results, err := h.searchUC.Execute(q)
+	results, err := h.searchUC.Execute(keywords)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "stock search failed", "keywords", q, "error", err)
+		slog.ErrorContext(c.Request.Context(), "stock search failed", "keywords", keywords, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search stocks"})
 		return
 	}

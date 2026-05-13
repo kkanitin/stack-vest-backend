@@ -40,3 +40,4 @@ docker-compose-local.yaml
 # AI Agents
 .junie
 .claude
+/postman/specs/openapi.yaml
