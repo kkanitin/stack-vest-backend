@@ -8,7 +8,7 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 )
 
-func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, jwtSecret string, log *slog.Logger) *gin.Engine {
+func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, jwtSecret string, log *slog.Logger) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(middleware.Logger(log))
@@ -20,6 +20,7 @@ func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, j
 
 	protected := v1.Group("", middleware.Auth(jwtSecret))
 	stockHandler.RegisterRoutes(protected)
+	userHandler.RegisterRoutes(protected)
 
 	return r
 }

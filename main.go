@@ -16,6 +16,7 @@ import (
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
+	useruc "github.com/kanitin/stackvest/backend/internal/usecase/user"
 	"github.com/kanitin/stackvest/backend/pkg/config"
 	"github.com/kanitin/stackvest/backend/pkg/database"
 	"github.com/kanitin/stackvest/backend/pkg/logger"
@@ -53,7 +54,10 @@ func main() {
 	)
 	authHandler := handler.NewAuthHandler(googleUC, cfg.Auth.JWT.Secret)
 
-	r := router.New(stockHandler, authHandler, cfg.Auth.JWT.Secret, log)
+	userUC := useruc.NewUserUseCase(userRepo)
+	userHandler := handler.NewUserHandler(userUC)
+
+	r := router.New(stockHandler, authHandler, userHandler, cfg.Auth.JWT.Secret, log)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,
