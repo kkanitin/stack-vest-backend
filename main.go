@@ -63,7 +63,7 @@ func main() {
 	userUC := useruc.NewUserUseCase(userRepo)
 	userHandler := handler.NewUserHandler(userUC)
 
-	r := router.New(stockHandler, authHandler, userHandler, cfg.Auth.JWT.Secret, log)
+	r := router.New(stockHandler, authHandler, userHandler, cfg.Auth.JWT.Secret, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,

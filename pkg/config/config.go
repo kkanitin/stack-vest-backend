@@ -38,6 +38,9 @@ type Config struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"alpha_vantage"`
 	} `yaml:"third_party_api"`
+	CORS struct {
+		AllowOrigins []string `yaml:"allow_origins"`
+	} `yaml:"cors"`
 }
 
 func Load() *Config {
@@ -81,6 +84,9 @@ func Load() *Config {
 	}
 	if v := os.Getenv("THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY"); v != "" {
 		cfg.ThirdPartyAPI.AlphaVantage.APIKey = v
+	}
+	if v := os.Getenv("CORS_ALLOW_ORIGINS"); v != "" {
+		cfg.CORS.AllowOrigins = strings.Split(v, ",")
 	}
 
 	return cfg

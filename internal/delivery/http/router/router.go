@@ -2,15 +2,24 @@ package router
 
 import (
 	"log/slog"
+	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 )
 
-func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, jwtSecret string, log *slog.Logger) *gin.Engine {
+func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, jwtSecret string, log *slog.Logger, allowOrigins []string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     allowOrigins,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
 	r.Use(middleware.Logger(log))
 
 	r.GET("/health", handler.NewHealthHandler().HealthCheck)
