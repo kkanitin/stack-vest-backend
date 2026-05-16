@@ -72,6 +72,25 @@ pkg/
 
 **API response convention:** all JSON response fields use `lowerCamelCase` (e.g. `marketOpen`, `matchScore`). Apply this to all `json:"..."` struct tags.
 
+**Standard response envelope:** all handlers (except `/health`) must use the helpers in `internal/delivery/http/response/` instead of raw `gin.H`. Two shapes are supported:
+
+- **Single object** — `response.OK(c, result)` / `response.Created(c, result)`:
+  ```json
+  { "result": {}, "code": 200, "message": "Success", "errorMessage": null }
+  ```
+- **List** — `response.OKList(c, results, response.Meta{...})`:
+  ```json
+  { "results": [], "code": 200, "message": "Success", "errorMessage": null, "meta": { "total": 0, "page": 1, "size": 0, "currentPageCount": 0 } }
+  ```
+- **Error** — `response.Err(c, statusCode, "human readable message")`:
+  ```json
+  { "result": null, "code": 4xx/5xx, "message": "Error", "errorMessage": "..." }
+  ```
+
+`errorMessage` is `*string` — it defaults to `null` on success and is only set to a string value on error.
+
+The `/health` endpoint is an explicit exception and keeps its own `{"message": "ready"}` shape.
+
 ## Environment Variables
 
 All config values can be overridden at runtime via environment variables. The naming rule is:

@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
+	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	userdomain "github.com/kanitin/stackvest/backend/internal/domain/user"
 	useruc "github.com/kanitin/stackvest/backend/internal/usecase/user"
 )
@@ -31,16 +32,16 @@ func (h *UserHandler) getMe(c *gin.Context) {
 
 	user, err := h.userUC.FindByEmail(c.Request.Context(), email)
 	if errors.Is(err, userdomain.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		response.Err(c, http.StatusNotFound, "user not found")
 		return
 	}
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "failed to find user", "email", email, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to find user"})
+		response.Err(c, http.StatusInternalServerError, "failed to find user")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"user": user})
+	response.OK(c, user)
 }
 
 func (h *UserHandler) createMe(c *gin.Context) {
@@ -50,14 +51,14 @@ func (h *UserHandler) createMe(c *gin.Context) {
 
 	user, err := h.userUC.Create(c.Request.Context(), email, name, picture)
 	if errors.Is(err, userdomain.ErrAlreadyExists) {
-		c.JSON(http.StatusConflict, gin.H{"error": "user already exists"})
+		response.Err(c, http.StatusConflict, "user already exists")
 		return
 	}
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "failed to create user", "email", email, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
+		response.Err(c, http.StatusInternalServerError, "failed to create user")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"user": user})
+	response.Created(c, user)
 }

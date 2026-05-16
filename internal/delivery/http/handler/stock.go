@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	domain "github.com/kanitin/stackvest/backend/internal/domain/stock"
 )
 
@@ -28,16 +29,17 @@ func (h *StockHandler) RegisterRoutes(rg *gin.RouterGroup) {
 func (h *StockHandler) Search(c *gin.Context) {
 	keywords := c.Query("keywords")
 	if keywords == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "query parameter 'keywords' is required"})
+		response.Err(c, http.StatusBadRequest, "query parameter 'keywords' is required")
 		return
 	}
 
 	results, err := h.searchUC.Execute(keywords)
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "stock search failed", "keywords", keywords, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search stocks"})
+		response.Err(c, http.StatusInternalServerError, "failed to search stocks")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"results": results})
+	n := len(results)
+	response.OKList(c, results, response.Meta{Total: n, Page: 1, Size: n, CurrentPageCount: n})
 }

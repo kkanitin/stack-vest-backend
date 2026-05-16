@@ -25,7 +25,7 @@ func (r *PostgresRepository) FindByGoogleID(ctx context.Context, googleID string
 	err := r.pool.QueryRow(
 		ctx,
 		`SELECT id, google_id, email, name, picture, created_at, updated_at
-		 FROM users WHERE google_id = $1`,
+		 FROM stackvest.users WHERE google_id = $1`,
 		googleID,
 	).Scan(&u.ID, &u.GoogleID, &u.Email, &u.Name, &u.Picture, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -40,7 +40,7 @@ func (r *PostgresRepository) FindByEmail(ctx context.Context, email string) (*us
 	err := r.pool.QueryRow(
 		ctx,
 		`SELECT id, google_id, email, name, picture, created_at, updated_at
-		 FROM users WHERE email = $1`,
+		 FROM stackvest.users WHERE email = $1`,
 		email,
 	).Scan(&u.ID, &googleID, &u.Email, &u.Name, &u.Picture, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -58,7 +58,7 @@ func (r *PostgresRepository) Create(ctx context.Context, u *userdomain.User) (*u
 	var googleID *string
 	err := r.pool.QueryRow(
 		ctx,
-		`INSERT INTO users (email, name, picture, created_at, updated_at)
+		`INSERT INTO stackvest.users (email, name, picture, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $4)
 		 RETURNING id, google_id, email, name, picture, created_at, updated_at`,
 		u.Email, u.Name, u.Picture, now,
@@ -81,7 +81,7 @@ func (r *PostgresRepository) Upsert(ctx context.Context, u *userdomain.User) (*u
 	var result userdomain.User
 	err := r.pool.QueryRow(
 		ctx,
-		`INSERT INTO users (google_id, email, name, picture, created_at, updated_at)
+		`INSERT INTO stackvest.users (google_id, email, name, picture, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $5)
 		 ON CONFLICT (google_id) DO UPDATE
 		   SET email = EXCLUDED.email,
