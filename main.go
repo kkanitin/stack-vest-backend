@@ -20,6 +20,7 @@ import (
 	"github.com/kanitin/stackvest/backend/pkg/config"
 	"github.com/kanitin/stackvest/backend/pkg/database"
 	"github.com/kanitin/stackvest/backend/pkg/logger"
+	"github.com/kanitin/stackvest/backend/pkg/migrate"
 )
 
 func main() {
@@ -36,11 +37,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	userRepo := userrepo.NewPostgresRepository(pool)
-	if err := userRepo.Migrate(context.Background()); err != nil {
-		slog.Error("failed to run migrations", "error", err)
-		os.Exit(1)
+	if cfg.DB.Migrate.Enabled {
+		slog.Info("running database migrations")
+		if err := migrate.Run(cfg.DB.Postgres.DSN); err != nil {
+			slog.Error("failed to run database migrations", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("database migrations complete")
 	}
+
+	userRepo := userrepo.NewPostgresRepository(pool)
 
 	avClient := alphavantage.NewClient(cfg.ThirdPartyAPI.AlphaVantage.APIKey)
 	searchUC := stockuc.NewSearchUseCase(avClient)

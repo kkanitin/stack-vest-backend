@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 )
@@ -18,6 +19,9 @@ type Config struct {
 		Postgres struct {
 			DSN string `yaml:"dsn"`
 		} `yaml:"postgres"`
+		Migrate struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"migrate"`
 	} `yaml:"db"`
 	Auth struct {
 		Google struct {
@@ -41,6 +45,7 @@ func Load() *Config {
 	cfg.Server.Port = "8080"
 	cfg.Log.Level = "info"
 	cfg.Log.Format = "json"
+	cfg.DB.Migrate.Enabled = true
 
 	if data, err := os.ReadFile("config.yaml"); err == nil {
 		_ = yaml.Unmarshal(data, cfg)
@@ -59,6 +64,9 @@ func Load() *Config {
 	if v := os.Getenv("DB_POSTGRES_DSN"); v != "" {
 		cfg.DB.Postgres.DSN = v
 	}
+	if v := os.Getenv("DB_MIGRATE_ENABLED"); v != "" {
+		cfg.DB.Migrate.Enabled = parseBool(v)
+	}
 	if v := os.Getenv("AUTH_GOOGLE_CLIENT_ID"); v != "" {
 		cfg.Auth.Google.ClientID = v
 	}
@@ -76,4 +84,13 @@ func Load() *Config {
 	}
 
 	return cfg
+}
+
+func parseBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
 }

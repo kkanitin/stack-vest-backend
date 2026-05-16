@@ -20,27 +20,6 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 	return &PostgresRepository{pool: pool}
 }
 
-func (r *PostgresRepository) Migrate(ctx context.Context) error {
-	for _, stmt := range []string{
-		`CREATE TABLE IF NOT EXISTS users (
-			id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-			google_id  TEXT        UNIQUE,
-			email      TEXT        NOT NULL,
-			name       TEXT        NOT NULL,
-			picture    TEXT        NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL,
-			updated_at TIMESTAMPTZ NOT NULL
-		)`,
-		`ALTER TABLE users ALTER COLUMN google_id DROP NOT NULL`,
-		`ALTER TABLE users ADD CONSTRAINT IF NOT EXISTS users_email_key UNIQUE (email)`,
-	} {
-		if _, err := r.pool.Exec(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *PostgresRepository) FindByGoogleID(ctx context.Context, googleID string) (*userdomain.User, error) {
 	var u userdomain.User
 	err := r.pool.QueryRow(
