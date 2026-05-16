@@ -16,9 +16,11 @@ import (
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
+	useruc "github.com/kanitin/stackvest/backend/internal/usecase/user"
 	"github.com/kanitin/stackvest/backend/pkg/config"
 	"github.com/kanitin/stackvest/backend/pkg/database"
 	"github.com/kanitin/stackvest/backend/pkg/logger"
+	"github.com/kanitin/stackvest/backend/pkg/migrate"
 )
 
 func main() {
@@ -35,11 +37,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	userRepo := userrepo.NewPostgresRepository(pool)
-	if err := userRepo.Migrate(context.Background()); err != nil {
-		slog.Error("failed to run migrations", "error", err)
-		os.Exit(1)
+	if cfg.DB.Migrate.Enabled {
+		slog.Info("running database migrations")
+		if err := migrate.Run(cfg.DB.Postgres.DSN); err != nil {
+			slog.Error("failed to run database migrations", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("database migrations complete")
 	}
+
+	userRepo := userrepo.NewPostgresRepository(pool)
 
 	avClient := alphavantage.NewClient(cfg.ThirdPartyAPI.AlphaVantage.APIKey)
 	searchUC := stockuc.NewSearchUseCase(avClient)
@@ -53,7 +60,10 @@ func main() {
 	)
 	authHandler := handler.NewAuthHandler(googleUC, cfg.Auth.JWT.Secret)
 
-	r := router.New(stockHandler, authHandler, cfg.Auth.JWT.Secret, log)
+	userUC := useruc.NewUserUseCase(userRepo)
+	userHandler := handler.NewUserHandler(userUC)
+
+	r := router.New(stockHandler, authHandler, userHandler, cfg.Auth.JWT.Secret, log)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,

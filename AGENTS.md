@@ -6,11 +6,11 @@ This file provides guidance to AI agents (Claude Code, Junie, etc.) when working
 
 ```bash
 # Build
-go build -o backend .
+go build -o bin/backend .
 
 # Run
 go run main.go          # starts on :8080
-./backend               # run compiled binary
+./bin/backend           # run compiled binary
 
 # Test
 go test ./...           # all tests
@@ -84,6 +84,8 @@ All config values can be overridden at runtime via environment variables. The na
 | `LOG_FORMAT`                            | `log.format`                            | `json`  |
 | `DB_MONGO_URI`                          | `db.mongo.uri`                          | —       |
 | `DB_MONGO_NAME`                         | `db.mongo.name`                         | —       |
+| `DB_POSTGRES_DSN`                       | `db.postgres.dsn`                       | —       |
+| `DB_MIGRATE_ENABLED`                    | `db.migrate.enabled`                    | `true`  |
 | `AUTH_GOOGLE_CLIENT_ID`                 | `auth.google.client_id`                 | —       |
 | `AUTH_GOOGLE_CLIENT_SECRET`             | `auth.google.client_secret`             | —       |
 | `AUTH_GOOGLE_REDIRECT_URL`              | `auth.google.redirect_url`              | —       |

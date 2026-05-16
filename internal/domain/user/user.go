@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-var ErrNotFound = errors.New("user not found")
+var (
+	ErrNotFound      = errors.New("user not found")
+	ErrAlreadyExists = errors.New("user already exists")
+)
 
 type User struct {
 	ID        string    `json:"id"`
@@ -20,5 +23,7 @@ type User struct {
 
 type Repository interface {
 	FindByGoogleID(ctx context.Context, googleID string) (*User, error)
+	FindByEmail(ctx context.Context, email string) (*User, error)
 	Upsert(ctx context.Context, user *User) (*User, error)
+	Create(ctx context.Context, user *User) (*User, error)
 }

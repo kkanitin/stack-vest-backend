@@ -8,7 +8,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const UserIDKey = "userID"
+const (
+	UserIDKey  = "userID"
+	EmailKey   = "email"
+	NameKey    = "name"
+	PictureKey = "picture"
+)
 
 func Auth(jwtSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -37,6 +42,9 @@ func Auth(jwtSecret string) gin.HandlerFunc {
 		}
 
 		c.Set(UserIDKey, claims["sub"])
+		c.Set(EmailKey, claims["email"])
+		c.Set(NameKey, claims["name"])
+		c.Set(PictureKey, claims["picture"])
 		c.Next()
 	}
 }

@@ -8,6 +8,8 @@ log:
 db:
   postgres:
     dsn: "postgres://user:password@localhost:5432/stackvest?sslmode=disable"
+  migrate:
+    enabled: true   # set to false to skip auto-migration on startup
 
 auth:
   google:
