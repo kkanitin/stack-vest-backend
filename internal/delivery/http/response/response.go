@@ -7,10 +7,10 @@ import (
 )
 
 type Meta struct {
-	Total            int `json:"total"`
-	Page             int `json:"page"`
-	Size             int `json:"size"`
-	CurrentPageCount int `json:"currentPageCount"`
+	Total            *int `json:"total"`
+	Page             *int `json:"page"`
+	Size             *int `json:"size"`
+	CurrentPageCount *int `json:"currentPageCount"`
 }
 
 type envelope struct {
