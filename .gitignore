@@ -39,6 +39,8 @@ docker-compose-local.yaml
 # .vscode/
 
 # AI Agents
-.junie
-.claude
+.junie/*
+!.junie/commands
+.claude/*
+!.claude/commands
 /postman/specs/openapi.yaml
