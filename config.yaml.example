@@ -20,5 +20,9 @@ auth:
     secret: "YOUR_JWT_SECRET_CHANGE_ME"
 
 third_party_api:
-  alpha_vantage:
-    api_key: "YOUR_ALPHA_VANTAGE_API_KEY"
+  fmp:
+    api_key: "YOUR_FMP_API_KEY"
+
+cors:
+  allow_origins:
+    - "http://localhost:5173"   # add your frontend origin(s) here

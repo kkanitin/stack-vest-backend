@@ -19,10 +19,19 @@ func (m *mockStockSearchUC) Execute(keywords string) ([]domain.Match, error) {
 	return m.results, m.err
 }
 
+type mockStockPriceChangeUC struct {
+	result *domain.PriceChange
+	err    error
+}
+
+func (m *mockStockPriceChangeUC) Execute(symbol string) (*domain.PriceChange, error) {
+	return m.result, m.err
+}
+
 func newStockRouter(uc stockSearchUseCase) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	NewStockHandler(uc).RegisterRoutes(r.Group(""))
+	NewStockHandler(uc, &mockStockPriceChangeUC{}).RegisterRoutes(r.Group(""))
 	return r
 }
 

@@ -40,7 +40,7 @@ internal/
   domain/               — Entities and repository/usecase interfaces (no external deps)
   usecase/              — Business logic; depends only on domain interfaces
   repository/           — MongoDB implementations of domain repository interfaces
-  infrastructure/       — External API clients and other infrastructure (AlphaVantage)
+  infrastructure/       — External API clients and other infrastructure (FMP)
   delivery/http/
     handler/            — Gin handlers; call use cases, never touch MongoDB directly
     router/             — Route registration; wires handlers together
@@ -72,6 +72,31 @@ pkg/
 
 **API response convention:** all JSON response fields use `lowerCamelCase` (e.g. `marketOpen`, `matchScore`). Apply this to all `json:"..."` struct tags.
 
+**Standard response envelope:** all handlers (except `/health`) must use the helpers in `internal/delivery/http/response/` instead of raw `gin.H`. Two shapes are supported:
+
+- **Single object** — `response.OK(c, result)` / `response.Created(c, result)`:
+  ```json
+  { "result": {}, "code": 200, "message": "Success", "errorMessage": null }
+  ```
+- **List** — `response.OKList(c, results, response.Meta{...})`:
+  ```json
+  { "results": [], "code": 200, "message": "Success", "errorMessage": null, "meta": { "total": 0, "page": 1, "size": 0, "currentPageCount": 0 } }
+  ```
+- **Error** — `response.Err(c, statusCode, "human readable message")`:
+  ```json
+  { "result": null, "code": 4xx/5xx, "message": "Error", "errorMessage": "..." }
+  ```
+
+`errorMessage` is `*string` — it defaults to `null` on success and is only set to a string value on error.
+
+The `/health` endpoint is an explicit exception and keeps its own `{"message": "ready"}` shape.
+
+**Pagination convention:** all list endpoints accept `page` (1-based, default `1`) and `size` (default `20`, max `100`) query parameters. Invalid values (`page < 1`, `size < 1`, `size > 100`) return `400 Bad Request`. Compute `offset = (page-1) * size` and `limit = size`.
+
+- **DB-backed list endpoints:** use a single SQL query with `LIMIT $n OFFSET $m` and `COUNT(*) OVER() AS total` (window function) to return both the page of rows and the total count in one round-trip.
+- **External-API list endpoints:** fetch all results, then slice `all[offset:min(offset+size, total)]` client-side.
+- Always populate all four `Meta` fields: `Total` (global count), `Page`, `Size`, `CurrentPageCount` (items in this page).
+
 ## Environment Variables
 
 All config values can be overridden at runtime via environment variables. The naming rule is:
@@ -90,7 +115,7 @@ All config values can be overridden at runtime via environment variables. The na
 | `AUTH_GOOGLE_CLIENT_SECRET`             | `auth.google.client_secret`             | —       |
 | `AUTH_GOOGLE_REDIRECT_URL`              | `auth.google.redirect_url`              | —       |
 | `AUTH_JWT_SECRET`                       | `auth.jwt.secret`                       | —       |
-| `THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY` | `third_party_api.alpha_vantage.api_key` | —       |
+| `THIRD_PARTY_API_FMP_API_KEY`           | `third_party_api.fmp.api_key`           | —       |
 
 Env vars take precedence over `config.yaml`. In production, set secrets via env vars and omit them from `config.yaml`
 entirely.

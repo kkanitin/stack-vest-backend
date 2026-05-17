@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 )
 
@@ -38,14 +39,14 @@ func (h *AuthHandler) googleCallback(c *gin.Context) {
 	// TODO: verify state matches the value sent in googleLogin
 	code := c.Query("code")
 	if code == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing code"})
+		response.Err(c, http.StatusBadRequest, "missing code")
 		return
 	}
 
 	user, err := h.googleUC.HandleCallback(c.Request.Context(), code)
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "google callback failed", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.Err(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -59,9 +60,9 @@ func (h *AuthHandler) googleCallback(c *gin.Context) {
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(h.jwtSecret))
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "failed to sign JWT", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to sign token"})
+		response.Err(c, http.StatusInternalServerError, "failed to sign token")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"token": signed, "user": user})
+	response.OK(c, gin.H{"token": signed, "user": user})
 }

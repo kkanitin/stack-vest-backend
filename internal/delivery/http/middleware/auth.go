@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
+	"google.golang.org/api/idtoken"
 )
 
 const (
@@ -15,7 +15,7 @@ const (
 	PictureKey = "picture"
 )
 
-func Auth(jwtSecret string) gin.HandlerFunc {
+func Auth(googleClientID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if !strings.HasPrefix(header, "Bearer ") {
@@ -24,27 +24,25 @@ func Auth(jwtSecret string) gin.HandlerFunc {
 		}
 
 		tokenStr := strings.TrimPrefix(header, "Bearer ")
-		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			return []byte(jwtSecret), nil
-		})
-		if err != nil || !token.Valid {
+		payload, err := idtoken.Validate(c.Request.Context(), tokenStr, googleClientID)
+		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
 
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid claims"})
-			return
-		}
-
-		c.Set(UserIDKey, claims["sub"])
-		c.Set(EmailKey, claims["email"])
-		c.Set(NameKey, claims["name"])
-		c.Set(PictureKey, claims["picture"])
+		c.Set(UserIDKey, stringClaim(payload.Claims, "sub"))
+		c.Set(EmailKey, stringClaim(payload.Claims, "email"))
+		c.Set(NameKey, stringClaim(payload.Claims, "name"))
+		c.Set(PictureKey, stringClaim(payload.Claims, "picture"))
 		c.Next()
 	}
+}
+
+func stringClaim(claims map[string]interface{}, key string) string {
+	if v, ok := claims[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }

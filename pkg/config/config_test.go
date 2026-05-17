@@ -11,7 +11,7 @@ func TestLoad(t *testing.T) {
 server:
   port: "9090"
 third_party_api:
-  alpha_vantage:
+  fmp:
     api_key: "test-key"
 `)
 	err := os.WriteFile("config.yaml.test", content, 0644)
@@ -35,21 +35,21 @@ third_party_api:
 	if cfg.Server.Port != "9090" {
 		t.Errorf("expected 9090, got %s", cfg.Server.Port)
 	}
-	if cfg.ThirdPartyAPI.AlphaVantage.APIKey != "test-key" {
-		t.Errorf("expected test-key, got %s", cfg.ThirdPartyAPI.AlphaVantage.APIKey)
+	if cfg.ThirdPartyAPI.FMP.APIKey != "test-key" {
+		t.Errorf("expected test-key, got %s", cfg.ThirdPartyAPI.FMP.APIKey)
 	}
 
 	// Test environment variable override
 	os.Setenv("SERVER_PORT", "9999")
-	os.Setenv("THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY", "env-key")
+	os.Setenv("THIRD_PARTY_API_FMP_API_KEY", "env-key")
 	defer os.Unsetenv("SERVER_PORT")
-	defer os.Unsetenv("THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY")
+	defer os.Unsetenv("THIRD_PARTY_API_FMP_API_KEY")
 
 	cfg = Load()
 	if cfg.Server.Port != "9999" {
 		t.Errorf("expected 9999 (env override), got %s", cfg.Server.Port)
 	}
-	if cfg.ThirdPartyAPI.AlphaVantage.APIKey != "env-key" {
-		t.Errorf("expected env-key (env override), got %s", cfg.ThirdPartyAPI.AlphaVantage.APIKey)
+	if cfg.ThirdPartyAPI.FMP.APIKey != "env-key" {
+		t.Errorf("expected env-key (env override), got %s", cfg.ThirdPartyAPI.FMP.APIKey)
 	}
 }

@@ -12,11 +12,13 @@ import (
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/router"
-	"github.com/kanitin/stackvest/backend/internal/infrastructure/alphavantage"
+	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
+	watchlistrepo "github.com/kanitin/stackvest/backend/internal/repository/watchlist"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
 	useruc "github.com/kanitin/stackvest/backend/internal/usecase/user"
+	watchlistuc "github.com/kanitin/stackvest/backend/internal/usecase/watchlist"
 	"github.com/kanitin/stackvest/backend/pkg/config"
 	"github.com/kanitin/stackvest/backend/pkg/database"
 	"github.com/kanitin/stackvest/backend/pkg/logger"
@@ -48,9 +50,10 @@ func main() {
 
 	userRepo := userrepo.NewPostgresRepository(pool)
 
-	avClient := alphavantage.NewClient(cfg.ThirdPartyAPI.AlphaVantage.APIKey)
+	avClient := fmp.NewClient(cfg.ThirdPartyAPI.FMP.APIKey)
 	searchUC := stockuc.NewSearchUseCase(avClient)
-	stockHandler := handler.NewStockHandler(searchUC)
+	priceChangeUC := stockuc.NewPriceChangeUseCase(avClient)
+	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC)
 
 	googleUC := authuc.NewGoogleUseCase(
 		cfg.Auth.Google.ClientID,
@@ -63,7 +66,11 @@ func main() {
 	userUC := useruc.NewUserUseCase(userRepo)
 	userHandler := handler.NewUserHandler(userUC)
 
-	r := router.New(stockHandler, authHandler, userHandler, cfg.Auth.JWT.Secret, log)
+	watchlistRepo := watchlistrepo.NewPostgresRepository(pool)
+	watchlistUC := watchlistuc.NewWatchlistUseCase(watchlistRepo, userRepo, avClient)
+	watchlistHandler := handler.NewWatchlistHandler(watchlistUC)
+
+	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,

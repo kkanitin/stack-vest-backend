@@ -34,10 +34,13 @@ type Config struct {
 		} `yaml:"jwt"`
 	} `yaml:"auth"`
 	ThirdPartyAPI struct {
-		AlphaVantage struct {
+		FMP struct {
 			APIKey string `yaml:"api_key"`
-		} `yaml:"alpha_vantage"`
+		} `yaml:"fmp"`
 	} `yaml:"third_party_api"`
+	CORS struct {
+		AllowOrigins []string `yaml:"allow_origins"`
+	} `yaml:"cors"`
 }
 
 func Load() *Config {
@@ -79,8 +82,11 @@ func Load() *Config {
 	if v := os.Getenv("AUTH_JWT_SECRET"); v != "" {
 		cfg.Auth.JWT.Secret = v
 	}
-	if v := os.Getenv("THIRD_PARTY_API_ALPHA_VANTAGE_API_KEY"); v != "" {
-		cfg.ThirdPartyAPI.AlphaVantage.APIKey = v
+	if v := os.Getenv("THIRD_PARTY_API_FMP_API_KEY"); v != "" {
+		cfg.ThirdPartyAPI.FMP.APIKey = v
+	}
+	if v := os.Getenv("CORS_ALLOW_ORIGINS"); v != "" {
+		cfg.CORS.AllowOrigins = strings.Split(v, ",")
 	}
 
 	return cfg
