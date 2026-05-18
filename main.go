@@ -16,6 +16,7 @@ import (
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
 	watchlistrepo "github.com/kanitin/stackvest/backend/internal/repository/watchlist"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
+	dcauc "github.com/kanitin/stackvest/backend/internal/usecase/dca"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
 	useruc "github.com/kanitin/stackvest/backend/internal/usecase/user"
 	watchlistuc "github.com/kanitin/stackvest/backend/internal/usecase/watchlist"
@@ -70,7 +71,10 @@ func main() {
 	watchlistUC := watchlistuc.NewWatchlistUseCase(watchlistRepo, userRepo, avClient)
 	watchlistHandler := handler.NewWatchlistHandler(watchlistUC)
 
-	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
+	dcaSimulatorUC := dcauc.NewSimulatorUseCase(avClient)
+	dcaHandler := handler.NewDCAHandler(dcaSimulatorUC)
+
+	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,

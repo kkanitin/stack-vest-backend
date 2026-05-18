@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
+	"github.com/kanitin/stackvest/backend/internal/domain/dca"
 	"github.com/kanitin/stackvest/backend/internal/domain/stock"
 )
 
@@ -114,3 +116,47 @@ func (c *Client) GetPriceChange(symbol string) (*stock.PriceChange, error) {
 }
 
 var _ stock.PriceChanger = (*Client)(nil)
+
+type fmpHistoricalResponse struct {
+	Symbol     string `json:"symbol"`
+	Historical []struct {
+		Date     string  `json:"date"`
+		AdjClose float64 `json:"adjClose"`
+	} `json:"historical"`
+}
+
+func (c *Client) GetHistoricalPrices(symbol string, from, to time.Time) ([]dca.HistoricalPrice, error) {
+	params := url.Values{}
+	params.Set("from", from.Format("2006-01-02"))
+	params.Set("to", to.Format("2006-01-02"))
+	params.Set("apikey", c.apiKey)
+
+	endpoint := fmt.Sprintf("%s/historical-price-eod/full/%s?%s", c.baseURL, symbol, params.Encode())
+	resp, err := c.httpClient.Get(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("fmp request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var raw fmpHistoricalResponse
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	}
+	if len(raw.Historical) == 0 {
+		return nil, dca.ErrSymbolNotFound
+	}
+
+	// FMP returns descending; reverse to ascending
+	prices := make([]dca.HistoricalPrice, 0, len(raw.Historical))
+	for i := len(raw.Historical) - 1; i >= 0; i-- {
+		h := raw.Historical[i]
+		t, err := time.Parse("2006-01-02", h.Date)
+		if err != nil {
+			continue
+		}
+		prices = append(prices, dca.HistoricalPrice{Date: t, AdjClose: h.AdjClose})
+	}
+	return prices, nil
+}
+
+var _ dca.PriceFetcher = (*Client)(nil)

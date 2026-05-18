@@ -35,14 +35,7 @@ type addItemRequest struct {
 }
 
 func (h *WatchlistHandler) list(c *gin.Context) {
-	//page, size, ok := parsePagination(c)
-	//if !ok {
-	//	return
-	//}
-
 	email := c.GetString(middleware.EmailKey)
-	//limit := size
-	//offset := (page - 1) * size
 
 	items, total, err := h.watchlistUC.List(c.Request.Context(), email)
 	if err != nil {
