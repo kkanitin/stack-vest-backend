@@ -28,10 +28,20 @@ func (m *mockStockPriceChangeUC) Execute(symbol string) (*domain.PriceChange, er
 	return m.result, m.err
 }
 
+type mockStockQuoteUC struct{}
+
+func (m *mockStockQuoteUC) Execute(symbol string) (*domain.Quote, error) { return nil, nil }
+
+type mockStockHistoryUC struct{}
+
+func (m *mockStockHistoryUC) Execute(symbol string, r domain.HistoryRange) (*domain.History, error) {
+	return nil, nil
+}
+
 func newStockRouter(uc stockSearchUseCase) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	NewStockHandler(uc, &mockStockPriceChangeUC{}).RegisterRoutes(r.Group(""))
+	NewStockHandler(uc, &mockStockPriceChangeUC{}, &mockStockQuoteUC{}, &mockStockHistoryUC{}).RegisterRoutes(r.Group(""))
 	return r
 }
 

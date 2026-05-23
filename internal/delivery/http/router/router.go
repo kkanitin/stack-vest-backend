@@ -10,7 +10,7 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 )
 
-func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, googleClientID string, log *slog.Logger, allowOrigins []string) *gin.Engine {
+func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, portfolioHandler *handler.PortfolioHandler, popularHandler *handler.PopularHandler, googleClientID string, log *slog.Logger, allowOrigins []string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(cors.New(cors.Config{
@@ -26,12 +26,14 @@ func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, u
 
 	v1 := r.Group("/api/v1")
 	authHandler.RegisterRoutes(v1)
+	popularHandler.RegisterRoutes(v1)
 
 	protected := v1.Group("", middleware.Auth(googleClientID))
 	stockHandler.RegisterRoutes(protected)
 	userHandler.RegisterRoutes(protected)
 	watchlistHandler.RegisterRoutes(protected)
 	dcaHandler.RegisterRoutes(protected)
+	portfolioHandler.RegisterRoutes(protected)
 
 	return r
 }

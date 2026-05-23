@@ -24,7 +24,7 @@ func NewWatchlistUseCase(
 	return &WatchlistUseCase{repo: repo, userRepo: userRepo, stockSearcher: stockSearcher}
 }
 
-func (uc *WatchlistUseCase) Add(ctx context.Context, email, symbol, name, itemType string) (
+func (uc *WatchlistUseCase) Add(ctx context.Context, email, symbol, name, itemType string, category []string) (
 	*watchlistdomain.Item, error,
 ) {
 	matches, err := uc.stockSearcher.SearchSymbol(symbol)
@@ -45,12 +45,16 @@ func (uc *WatchlistUseCase) Add(ctx context.Context, email, symbol, name, itemTy
 	if err != nil {
 		return nil, err
 	}
+	if category == nil {
+		category = []string{}
+	}
 	return uc.repo.Add(
 		ctx, &watchlistdomain.Item{
-			UserID: user.ID,
-			Symbol: validated.Symbol,
-			Name:   validated.Name,
-			Type:   validated.Type,
+			UserID:   user.ID,
+			Symbol:   validated.Symbol,
+			Name:     validated.Name,
+			Type:     validated.Type,
+			Category: category,
 		},
 	)
 }
@@ -69,4 +73,12 @@ func (uc *WatchlistUseCase) List(ctx context.Context, email string) ([]watchlist
 		return nil, 0, err
 	}
 	return uc.repo.ListByUserID(ctx, user.ID)
+}
+
+func (uc *WatchlistUseCase) SetAlerts(ctx context.Context, email, symbol string, enabled bool) (*watchlistdomain.Item, error) {
+	user, err := uc.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	return uc.repo.SetAlertsEnabled(ctx, user.ID, symbol, enabled)
 }
