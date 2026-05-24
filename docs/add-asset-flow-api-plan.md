@@ -35,7 +35,7 @@ of truth for both use cases.
 ## Non-Goals
 
 - A `/suggestions` endpoint or admin UI for managing the curated list.
-- Personalised suggestions based on user history.
+- Personalized suggestions based on user history.
 - Changes to the search flow (`GET /stocks/search`) or watchlist endpoints.
 - Pagination (the consumer only needs a short list, `?limit=` is sufficient).
 

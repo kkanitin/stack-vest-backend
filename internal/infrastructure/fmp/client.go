@@ -2,14 +2,19 @@ package fmp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/kanitin/stackvest/backend/internal/domain/dca"
 	"github.com/kanitin/stackvest/backend/internal/domain/stock"
 )
+
+var ErrRateLimited = errors.New("fmp: rate limit exceeded")
 
 type Client struct {
 	apiKey     string
@@ -25,6 +30,48 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
+const (
+	maxRetries    = 3
+	maxRetryDelay = 2 * time.Second
+)
+
+func (c *Client) doGet(url string) (*http.Response, error) {
+	backoff := 200 * time.Millisecond
+
+	for attempt := range maxRetries {
+		resp, err := c.httpClient.Get(url)
+		if err != nil {
+			return nil, fmt.Errorf("fmp request failed: %w", err)
+		}
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return resp, nil
+		}
+		resp.Body.Close()
+
+		if attempt == maxRetries-1 {
+			return nil, ErrRateLimited
+		}
+
+		delay := backoff
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			if secs, err := strconv.Atoi(ra); err == nil {
+				delay = time.Duration(secs) * time.Second
+			} else if t, err := http.ParseTime(ra); err == nil {
+				delay = time.Until(t)
+			}
+		}
+		if delay > maxRetryDelay {
+			delay = maxRetryDelay
+		}
+		if delay < 0 {
+			delay = 0
+		}
+		time.Sleep(delay)
+		backoff *= 2
+	}
+	return nil, ErrRateLimited
+}
+
 type fmpSearchResult struct {
 	Symbol           string `json:"symbol"`
 	Name             string `json:"name"`
@@ -38,9 +85,9 @@ func (c *Client) SearchSymbol(keywords string) ([]stock.Match, error) {
 	params.Set("query", keywords)
 	params.Set("apikey", c.apiKey)
 
-	resp, err := c.httpClient.Get(c.baseURL + "/search-symbol?" + params.Encode())
+	resp, err := c.doGet(c.baseURL + "/search-symbol?" + params.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("fmp request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -84,9 +131,9 @@ func (c *Client) GetPriceChange(symbol string) (*stock.PriceChange, error) {
 	params.Set("symbol", symbol)
 	params.Set("apikey", c.apiKey)
 
-	resp, err := c.httpClient.Get(c.baseURL + "/stock-price-change?" + params.Encode())
+	resp, err := c.doGet(c.baseURL + "/stock-price-change?" + params.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("fmp request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -131,9 +178,9 @@ func (c *Client) GetQuote(symbol string) (*stock.Quote, error) {
 	params.Set("symbol", symbol)
 	params.Set("apikey", c.apiKey)
 
-	resp, err := c.httpClient.Get(c.baseURL + "/quote?" + params.Encode())
+	resp, err := c.doGet(c.baseURL + "/quote?" + params.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("fmp request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -158,13 +205,43 @@ func (c *Client) GetQuote(symbol string) (*stock.Quote, error) {
 
 var _ stock.Quoter = (*Client)(nil)
 
-type fmpHistoricalResponse struct {
-	Symbol     string `json:"symbol"`
-	Historical []struct {
-		Date     string  `json:"date"`
-		AdjClose float64 `json:"adjClose"`
-		Close    float64 `json:"close"`
-	} `json:"historical"`
+type fmpHistoricalPoint struct {
+	Date     string  `json:"date"`
+	AdjClose float64 `json:"adjClose"`
+	Close    float64 `json:"close"`
+}
+
+// decodeHistorical handles both FMP response shapes:
+// - flat array: [{date, close, adjClose, ...}, ...]
+// - wrapped object: {symbol: "...", historical: [{date, close, adjClose, ...}, ...]}
+func decodeHistorical(body io.Reader) ([]fmpHistoricalPoint, error) {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("fmp read body failed: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, errors.New("fmp returned empty response")
+	}
+
+	// Detect shape by first non-whitespace byte
+	var points []fmpHistoricalPoint
+	switch data[0] {
+	case '[':
+		if err := json.Unmarshal(data, &points); err != nil {
+			return nil, fmt.Errorf("fmp decode failed: %w", err)
+		}
+	case '{':
+		var wrapped struct {
+			Historical []fmpHistoricalPoint `json:"historical"`
+		}
+		if err := json.Unmarshal(data, &wrapped); err != nil {
+			return nil, fmt.Errorf("fmp decode failed: %w", err)
+		}
+		points = wrapped.Historical
+	default:
+		return nil, fmt.Errorf("fmp unexpected response: %s", string(data[:min(len(data), 200)]))
+	}
+	return points, nil
 }
 
 func (c *Client) GetHistoricalPrices(symbol string, from, to time.Time) ([]dca.HistoricalPrice, error) {
@@ -174,24 +251,24 @@ func (c *Client) GetHistoricalPrices(symbol string, from, to time.Time) ([]dca.H
 	params.Set("apikey", c.apiKey)
 
 	endpoint := fmt.Sprintf("%s/historical-price-eod/full/%s?%s", c.baseURL, symbol, params.Encode())
-	resp, err := c.httpClient.Get(endpoint)
+	resp, err := c.doGet(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("fmp request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var raw fmpHistoricalResponse
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	raw, err := decodeHistorical(resp.Body)
+	if err != nil {
+		return nil, err
 	}
-	if len(raw.Historical) == 0 {
+	if len(raw) == 0 {
 		return nil, dca.ErrSymbolNotFound
 	}
 
 	// FMP returns descending; reverse to ascending
-	prices := make([]dca.HistoricalPrice, 0, len(raw.Historical))
-	for i := len(raw.Historical) - 1; i >= 0; i-- {
-		h := raw.Historical[i]
+	prices := make([]dca.HistoricalPrice, 0, len(raw))
+	for i := len(raw) - 1; i >= 0; i-- {
+		h := raw[i]
 		t, err := time.Parse("2006-01-02", h.Date)
 		if err != nil {
 			continue
@@ -210,24 +287,24 @@ func (c *Client) GetHistoryClose(symbol string, from, to time.Time) ([]stock.His
 	params.Set("apikey", c.apiKey)
 
 	endpoint := fmt.Sprintf("%s/historical-price-eod/full/%s?%s", c.baseURL, symbol, params.Encode())
-	resp, err := c.httpClient.Get(endpoint)
+	resp, err := c.doGet(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("fmp request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var raw fmpHistoricalResponse
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	raw, err := decodeHistorical(resp.Body)
+	if err != nil {
+		return nil, err
 	}
-	if len(raw.Historical) == 0 {
+	if len(raw) == 0 {
 		return nil, stock.ErrSymbolNotFound
 	}
 
 	// FMP returns descending; reverse to ascending
-	points := make([]stock.HistoryPoint, 0, len(raw.Historical))
-	for i := len(raw.Historical) - 1; i >= 0; i-- {
-		h := raw.Historical[i]
+	points := make([]stock.HistoryPoint, 0, len(raw))
+	for i := len(raw) - 1; i >= 0; i-- {
+		h := raw[i]
 		points = append(points, stock.HistoryPoint{Date: h.Date, Close: h.Close})
 	}
 	return points, nil
@@ -252,9 +329,9 @@ func (c *Client) GetMostActiveStocks(n int) ([]MostActiveStock, error) {
 	params := url.Values{}
 	params.Set("apikey", c.apiKey)
 
-	resp, err := c.httpClient.Get(c.baseURL + "/most-actives?" + params.Encode())
+	resp, err := c.doGet(c.baseURL + "/most-actives?" + params.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("fmp request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
