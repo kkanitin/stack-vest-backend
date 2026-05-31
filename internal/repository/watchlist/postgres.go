@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -22,11 +23,11 @@ func (r *PostgresRepository) Add(ctx context.Context, item *watchlistdomain.Item
 	var result watchlistdomain.Item
 	err := r.pool.QueryRow(
 		ctx,
-		`INSERT INTO stackvest.watchlists (user_id, symbol, name, type)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING id, user_id, symbol, name, type, added_at`,
-		item.UserID, item.Symbol, item.Name, item.Type,
-	).Scan(&result.ID, &result.UserID, &result.Symbol, &result.Name, &result.Type, &result.AddedAt)
+		`INSERT INTO stackvest.watchlists (user_id, symbol, name, type, category)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id, user_id, symbol, name, type, added_at, alerts_enabled, category`,
+		item.UserID, item.Symbol, item.Name, item.Type, item.Category,
+	).Scan(&result.ID, &result.UserID, &result.Symbol, &result.Name, &result.Type, &result.AddedAt, &result.AlertsEnabled, &result.Category)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return nil, watchlistdomain.ErrAlreadyExists
@@ -55,7 +56,7 @@ func (r *PostgresRepository) Remove(ctx context.Context, userID, symbol string) 
 func (r *PostgresRepository) ListByUserID(ctx context.Context, userID string) ([]watchlistdomain.Item, int, error) {
 	rows, err := r.pool.Query(
 		ctx,
-		`SELECT id, user_id, symbol, name, type, added_at, COUNT(*) OVER() AS total
+		`SELECT id, user_id, symbol, name, type, added_at, alerts_enabled, category, COUNT(*) OVER() AS total
 		 FROM stackvest.watchlists
 		 WHERE user_id = $1
 		 ORDER BY added_at DESC`,
@@ -71,7 +72,7 @@ func (r *PostgresRepository) ListByUserID(ctx context.Context, userID string) ([
 	for rows.Next() {
 		var item watchlistdomain.Item
 		if err := rows.Scan(
-			&item.ID, &item.UserID, &item.Symbol, &item.Name, &item.Type, &item.AddedAt, &total,
+			&item.ID, &item.UserID, &item.Symbol, &item.Name, &item.Type, &item.AddedAt, &item.AlertsEnabled, &item.Category, &total,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -84,6 +85,26 @@ func (r *PostgresRepository) ListByUserID(ctx context.Context, userID string) ([
 		items = []watchlistdomain.Item{}
 	}
 	return items, total, nil
+}
+
+func (r *PostgresRepository) SetAlertsEnabled(
+	ctx context.Context, userID, symbol string, enabled bool,
+) (*watchlistdomain.Item, error) {
+	var item watchlistdomain.Item
+	err := r.pool.QueryRow(ctx,
+		`UPDATE stackvest.watchlists
+		    SET alerts_enabled = $3
+		  WHERE user_id = $1 AND symbol = $2
+		  RETURNING id, user_id, symbol, name, type, added_at, alerts_enabled, category`,
+		userID, symbol, enabled,
+	).Scan(&item.ID, &item.UserID, &item.Symbol, &item.Name, &item.Type, &item.AddedAt, &item.AlertsEnabled, &item.Category)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, watchlistdomain.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
 }
 
 var _ watchlistdomain.Repository = (*PostgresRepository)(nil)

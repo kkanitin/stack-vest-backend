@@ -13,16 +13,19 @@ var (
 )
 
 type Item struct {
-	ID      string    `json:"id"`
-	UserID  string    `json:"userId"`
-	Symbol  string    `json:"symbol"`
-	Name    string    `json:"name"`
-	Type    string    `json:"type"`
-	AddedAt time.Time `json:"addedAt"`
+	ID            string    `json:"id"`
+	UserID        string    `json:"userId"`
+	Symbol        string    `json:"symbol"`
+	Name          string    `json:"name"`
+	Type          string    `json:"type"`
+	AddedAt       time.Time `json:"addedAt"`
+	AlertsEnabled bool      `json:"alertsEnabled"`
+	Category      []string  `json:"category"`
 }
 
 type Repository interface {
 	Add(ctx context.Context, item *Item) (*Item, error)
 	Remove(ctx context.Context, userID, symbol string) error
 	ListByUserID(ctx context.Context, userID string) ([]Item, int, error)
+	SetAlertsEnabled(ctx context.Context, userID, symbol string, enabled bool) (*Item, error)
 }

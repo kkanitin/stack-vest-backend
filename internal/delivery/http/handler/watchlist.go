@@ -26,23 +26,18 @@ func (h *WatchlistHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	wl.GET("", h.list)
 	wl.POST("", h.add)
 	wl.DELETE("/:symbol", h.remove)
+	wl.PATCH("/:symbol/alerts", h.setAlerts)
 }
 
 type addItemRequest struct {
-	Symbol string `json:"symbol" binding:"required"`
-	Name   string `json:"name" binding:"required"`
-	Type   string `json:"type"`
+	Symbol   string   `json:"symbol" binding:"required"`
+	Name     string   `json:"name" binding:"required"`
+	Type     string   `json:"type"`
+	Category []string `json:"category"`
 }
 
 func (h *WatchlistHandler) list(c *gin.Context) {
-	//page, size, ok := parsePagination(c)
-	//if !ok {
-	//	return
-	//}
-
 	email := c.GetString(middleware.EmailKey)
-	//limit := size
-	//offset := (page - 1) * size
 
 	items, total, err := h.watchlistUC.List(c.Request.Context(), email)
 	if err != nil {
@@ -69,7 +64,7 @@ func (h *WatchlistHandler) add(c *gin.Context) {
 
 	email := c.GetString(middleware.EmailKey)
 
-	item, err := h.watchlistUC.Add(c.Request.Context(), email, req.Symbol, req.Name, req.Type)
+	item, err := h.watchlistUC.Add(c.Request.Context(), email, req.Symbol, req.Name, req.Type, req.Category)
 	if errors.Is(err, watchlistdomain.ErrInvalidSymbol) {
 		response.Err(c, http.StatusBadRequest, "invalid symbol")
 		return
@@ -87,6 +82,41 @@ func (h *WatchlistHandler) add(c *gin.Context) {
 	}
 
 	response.Created(c, item)
+}
+
+type setAlertsRequest struct {
+	Enabled *bool `json:"enabled" binding:"required"`
+}
+
+type alertsResponse struct {
+	Symbol        string `json:"symbol"`
+	AlertsEnabled bool   `json:"alertsEnabled"`
+}
+
+func (h *WatchlistHandler) setAlerts(c *gin.Context) {
+	symbol := c.Param("symbol")
+	email := c.GetString(middleware.EmailKey)
+
+	var req setAlertsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Err(c, http.StatusBadRequest, "enabled must be a boolean")
+		return
+	}
+
+	item, err := h.watchlistUC.SetAlerts(c.Request.Context(), email, symbol, *req.Enabled)
+	if errors.Is(err, watchlistdomain.ErrNotFound) {
+		response.Err(c, http.StatusNotFound, "symbol not in watchlist")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(
+			c.Request.Context(), "failed to update alerts", "email", email, "symbol", symbol, "error", err,
+		)
+		response.Err(c, http.StatusInternalServerError, "failed to update alerts")
+		return
+	}
+
+	response.OK(c, alertsResponse{Symbol: item.Symbol, AlertsEnabled: item.AlertsEnabled})
 }
 
 func (h *WatchlistHandler) remove(c *gin.Context) {

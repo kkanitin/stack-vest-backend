@@ -13,9 +13,12 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/router"
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
+	portfoliorepo "github.com/kanitin/stackvest/backend/internal/repository/portfolio"
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
 	watchlistrepo "github.com/kanitin/stackvest/backend/internal/repository/watchlist"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
+	dcauc "github.com/kanitin/stackvest/backend/internal/usecase/dca"
+	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
 	useruc "github.com/kanitin/stackvest/backend/internal/usecase/user"
 	watchlistuc "github.com/kanitin/stackvest/backend/internal/usecase/watchlist"
@@ -53,7 +56,9 @@ func main() {
 	avClient := fmp.NewClient(cfg.ThirdPartyAPI.FMP.APIKey)
 	searchUC := stockuc.NewSearchUseCase(avClient)
 	priceChangeUC := stockuc.NewPriceChangeUseCase(avClient)
-	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC)
+	quoteUC := stockuc.NewQuoteUseCase(avClient)
+	historyUC := stockuc.NewHistoryUseCase(avClient)
+	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC, quoteUC, historyUC)
 
 	googleUC := authuc.NewGoogleUseCase(
 		cfg.Auth.Google.ClientID,
@@ -70,7 +75,16 @@ func main() {
 	watchlistUC := watchlistuc.NewWatchlistUseCase(watchlistRepo, userRepo, avClient)
 	watchlistHandler := handler.NewWatchlistHandler(watchlistUC)
 
-	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
+	dcaSimulatorUC := dcauc.NewSimulatorUseCase(avClient)
+	dcaHandler := handler.NewDCAHandler(dcaSimulatorUC)
+
+	portfolioRepo := portfoliorepo.NewPostgresRepository(pool)
+	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, avClient, avClient)
+	portfolioHandler := handler.NewPortfolioHandler(portfolioUC)
+
+	popularHandler := handler.NewPopularHandler(avClient)
+
+	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,
