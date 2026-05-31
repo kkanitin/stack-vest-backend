@@ -25,42 +25,38 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-func TestDecodeHistorical_Array(t *testing.T) {
-	body := `[{"date":"2024-01-02","adjClose":185.5,"close":185.5},{"date":"2024-01-03","adjClose":184.0,"close":184.0}]`
-	points, err := decodeHistorical(strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestDecodeHistorical(t *testing.T) {
+	tests := []struct {
+		name         string
+		body         string
+		wantLen      int
+		wantAdjClose float64
+	}{
+		{
+			"array",
+			`[{"date":"2024-01-02","adjClose":185.5,"close":185.5},{"date":"2024-01-03","adjClose":184.0,"close":184.0}]`,
+			2, 185.5,
+		},
+		{
+			"wrapped object",
+			`{"symbol":"AAPL","historical":[{"date":"2024-01-02","adjClose":185.5,"close":185.5}]}`,
+			1, 185.5,
+		},
+		{"empty array", `[]`, 0, 0},
 	}
-	if len(points) != 2 {
-		t.Fatalf("expected 2 points, got %d", len(points))
-	}
-	if points[0].Date != "2024-01-02" {
-		t.Errorf("expected date 2024-01-02, got %s", points[0].Date)
-	}
-}
-
-func TestDecodeHistorical_WrappedObject(t *testing.T) {
-	body := `{"symbol":"AAPL","historical":[{"date":"2024-01-02","adjClose":185.5,"close":185.5}]}`
-	points, err := decodeHistorical(strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(points) != 1 {
-		t.Fatalf("expected 1 point, got %d", len(points))
-	}
-	if points[0].AdjClose != 185.5 {
-		t.Errorf("expected adjClose 185.5, got %f", points[0].AdjClose)
-	}
-}
-
-func TestDecodeHistorical_Empty(t *testing.T) {
-	body := `[]`
-	points, err := decodeHistorical(strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(points) != 0 {
-		t.Errorf("expected 0 points, got %d", len(points))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			points, err := decodeHistorical(strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(points) != tc.wantLen {
+				t.Fatalf("expected %d points, got %d", tc.wantLen, len(points))
+			}
+			if tc.wantLen > 0 && points[0].AdjClose != tc.wantAdjClose {
+				t.Errorf("expected adjClose %f, got %f", tc.wantAdjClose, points[0].AdjClose)
+			}
+		})
 	}
 }
 

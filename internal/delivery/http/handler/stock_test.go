@@ -45,36 +45,25 @@ func newStockRouter(uc stockSearchUseCase) *gin.Engine {
 	return r
 }
 
-func TestSearch_MissingKeywords(t *testing.T) {
-	r := newStockRouter(&mockStockSearchUC{})
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/stocks/search", nil))
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+func TestSearch(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		mockErr  error
+		wantCode int
+	}{
+		{"missing keywords", "/stocks/search", nil, http.StatusBadRequest},
+		{"use-case error", "/stocks/search?keywords=AAPL", errors.New("upstream error"), http.StatusInternalServerError},
+		{"success", "/stocks/search?keywords=AAPL", nil, http.StatusOK},
 	}
-}
-
-func TestSearch_UseCaseError(t *testing.T) {
-	r := newStockRouter(&mockStockSearchUC{err: errors.New("upstream error")})
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/stocks/search?keywords=AAPL", nil))
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", w.Code)
-	}
-}
-
-func TestSearch_Success(t *testing.T) {
-	matches := []domain.Match{{Symbol: "AAPL", Name: "Apple Inc."}}
-	r := newStockRouter(&mockStockSearchUC{results: matches})
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/stocks/search?keywords=AAPL", nil))
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStockRouter(&mockStockSearchUC{err: tc.mockErr})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d", tc.wantCode, w.Code)
+			}
+		})
 	}
 }

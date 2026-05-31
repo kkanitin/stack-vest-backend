@@ -160,38 +160,40 @@ func TestBiweeklyAnchoring(t *testing.T) {
 	}
 }
 
-func TestSinglePeriodReturnsErrDateRangeTooShort(t *testing.T) {
-	// Only one month, only 1 trading day available → after deduplication still 1 resolved date
-	prices := []dca.HistoricalPrice{
-		{Date: date("2023-01-02"), AdjClose: 100.0},
+func TestSimulate_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		prices  []dca.HistoricalPrice
+		input   dca.SimulationInput
+		wantErr error
+	}{
+		{
+			name:   "empty prices → symbol not found",
+			prices: nil,
+			input: dca.SimulationInput{
+				Symbol: "XYZZ", StartDate: date("2023-01-01"), EndDate: date("2023-12-31"),
+				Amount: 100.0, Frequency: dca.FrequencyMonthly,
+			},
+			wantErr: dca.ErrSymbolNotFound,
+		},
+		{
+			name:   "single period → date range too short",
+			prices: []dca.HistoricalPrice{{Date: date("2023-01-02"), AdjClose: 100.0}},
+			input: dca.SimulationInput{
+				Symbol: "TEST", StartDate: date("2023-01-01"), EndDate: date("2023-01-31"),
+				Amount: 100.0, Frequency: dca.FrequencyMonthly,
+			},
+			wantErr: dca.ErrDateRangeTooShort,
+		},
 	}
-
-	uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: prices})
-	_, err := uc.Execute(dca.SimulationInput{
-		Symbol:    "TEST",
-		StartDate: date("2023-01-01"),
-		EndDate:   date("2023-01-31"),
-		Amount:    100.0,
-		Frequency: dca.FrequencyMonthly,
-	})
-
-	if !errors.Is(err, dca.ErrDateRangeTooShort) {
-		t.Errorf("expected ErrDateRangeTooShort, got %v", err)
-	}
-}
-
-func TestEmptyPriceResponseReturnsErrSymbolNotFound(t *testing.T) {
-	uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: nil})
-	_, err := uc.Execute(dca.SimulationInput{
-		Symbol:    "XYZZ",
-		StartDate: date("2023-01-01"),
-		EndDate:   date("2023-12-31"),
-		Amount:    100.0,
-		Frequency: dca.FrequencyMonthly,
-	})
-
-	if !errors.Is(err, dca.ErrSymbolNotFound) {
-		t.Errorf("expected ErrSymbolNotFound, got %v", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: tc.prices})
+			_, err := uc.Execute(tc.input)
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }
 
