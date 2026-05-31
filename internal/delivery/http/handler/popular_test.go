@@ -251,24 +251,24 @@ func TestPopular_LimitParam_CapsStockResults(t *testing.T) {
 
 // --- validation ---
 
-func TestPopular_InvalidType_Returns400(t *testing.T) {
-	r := newPopularRouter(nil)
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/popular?type=bonds", nil)
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+func TestPopular_BadParam_Returns400(t *testing.T) {
+	tests := []struct{ name, query string }{
+		{"invalid type", "?type=bonds"},
+		{"limit abc", "?limit=abc"},
+		{"limit 0", "?limit=0"},
+		{"limit -1", "?limit=-1"},
+		{"limit 51", "?limit=51"},
+		{"limit 100", "?limit=100"},
 	}
-}
-
-func TestPopular_InvalidLimit_Returns400(t *testing.T) {
-	for _, bad := range []string{"abc", "0", "-1", "51", "100"} {
-		r := newPopularRouter(nil)
-		w := httptest.NewRecorder()
-		req, _ := http.NewRequest(http.MethodGet, "/popular?limit="+bad, nil)
-		r.ServeHTTP(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected 400 for limit=%s, got %d", bad, w.Code)
-		}
+	r := newPopularRouter(nil)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest(http.MethodGet, "/popular"+tc.query, nil)
+			r.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d", w.Code)
+			}
+		})
 	}
 }

@@ -54,88 +54,58 @@ func newUserRouter(repo userdomain.Repository) *gin.Engine {
 	return r
 }
 
-func TestGetMe_NotFound(t *testing.T) {
-	repo := &mockUserRepo{
-		findByEmailFn: func(_ context.Context, _ string) (*userdomain.User, error) {
+func TestGetMe(t *testing.T) {
+	tests := []struct {
+		name        string
+		findByEmail func(context.Context, string) (*userdomain.User, error)
+		wantCode    int
+	}{
+		{"not found", func(_ context.Context, _ string) (*userdomain.User, error) {
 			return nil, userdomain.ErrNotFound
-		},
-	}
-	w := httptest.NewRecorder()
-	newUserRouter(repo).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/users/me", nil))
-
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", w.Code)
-	}
-}
-
-func TestGetMe_InternalError(t *testing.T) {
-	repo := &mockUserRepo{
-		findByEmailFn: func(_ context.Context, _ string) (*userdomain.User, error) {
+		}, http.StatusNotFound},
+		{"internal error", func(_ context.Context, _ string) (*userdomain.User, error) {
 			return nil, context.DeadlineExceeded
-		},
+		}, http.StatusInternalServerError},
+		{"success", func(_ context.Context, _ string) (*userdomain.User, error) {
+			return &userdomain.User{ID: "123", Email: "test@example.com", Name: "Test User"}, nil
+		}, http.StatusOK},
 	}
-	w := httptest.NewRecorder()
-	newUserRouter(repo).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/users/me", nil))
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", w.Code)
-	}
-}
-
-func TestGetMe_Success(t *testing.T) {
-	user := &userdomain.User{ID: "123", Email: "test@example.com", Name: "Test User"}
-	repo := &mockUserRepo{
-		findByEmailFn: func(_ context.Context, _ string) (*userdomain.User, error) {
-			return user, nil
-		},
-	}
-	w := httptest.NewRecorder()
-	newUserRouter(repo).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/users/me", nil))
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newUserRouter(&mockUserRepo{findByEmailFn: tc.findByEmail})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/users/me", nil))
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d", tc.wantCode, w.Code)
+			}
+		})
 	}
 }
 
-func TestCreateMe_AlreadyExists(t *testing.T) {
-	repo := &mockUserRepo{
-		createFn: func(_ context.Context, _ *userdomain.User) (*userdomain.User, error) {
+func TestCreateMe(t *testing.T) {
+	tests := []struct {
+		name     string
+		createFn func(context.Context, *userdomain.User) (*userdomain.User, error)
+		wantCode int
+	}{
+		{"already exists", func(_ context.Context, _ *userdomain.User) (*userdomain.User, error) {
 			return nil, userdomain.ErrAlreadyExists
-		},
-	}
-	w := httptest.NewRecorder()
-	newUserRouter(repo).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/users/me", nil))
-
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d", w.Code)
-	}
-}
-
-func TestCreateMe_InternalError(t *testing.T) {
-	repo := &mockUserRepo{
-		createFn: func(_ context.Context, _ *userdomain.User) (*userdomain.User, error) {
+		}, http.StatusConflict},
+		{"internal error", func(_ context.Context, _ *userdomain.User) (*userdomain.User, error) {
 			return nil, context.DeadlineExceeded
-		},
+		}, http.StatusInternalServerError},
+		{"success", func(_ context.Context, _ *userdomain.User) (*userdomain.User, error) {
+			return &userdomain.User{ID: "123", Email: "test@example.com", Name: "Test User"}, nil
+		}, http.StatusCreated},
 	}
-	w := httptest.NewRecorder()
-	newUserRouter(repo).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/users/me", nil))
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", w.Code)
-	}
-}
-
-func TestCreateMe_Success(t *testing.T) {
-	user := &userdomain.User{ID: "123", Email: "test@example.com", Name: "Test User"}
-	repo := &mockUserRepo{
-		createFn: func(_ context.Context, _ *userdomain.User) (*userdomain.User, error) {
-			return user, nil
-		},
-	}
-	w := httptest.NewRecorder()
-	newUserRouter(repo).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/users/me", nil))
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d", w.Code)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newUserRouter(&mockUserRepo{createFn: tc.createFn})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/users/me", nil))
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d", tc.wantCode, w.Code)
+			}
+		})
 	}
 }
