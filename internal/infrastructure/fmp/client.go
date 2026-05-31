@@ -98,13 +98,15 @@ func (c *Client) SearchSymbol(keywords string) ([]stock.Match, error) {
 
 	matches := make([]stock.Match, 0, len(raw))
 	for _, r := range raw {
-		matches = append(matches, stock.Match{
-			Symbol:   r.Symbol,
-			Name:     r.Name,
-			Type:     r.Exchange,
-			Region:   r.ExchangeFullName,
-			Currency: r.Currency,
-		})
+		matches = append(
+			matches, stock.Match{
+				Symbol:   r.Symbol,
+				Name:     r.Name,
+				Type:     r.Exchange,
+				Region:   r.ExchangeFullName,
+				Currency: r.Currency,
+			},
+		)
 	}
 	return matches, nil
 }
@@ -246,11 +248,12 @@ func decodeHistorical(body io.Reader) ([]fmpHistoricalPoint, error) {
 
 func (c *Client) GetHistoricalPrices(symbol string, from, to time.Time) ([]dca.HistoricalPrice, error) {
 	params := url.Values{}
+	params.Set("symbol", symbol)
 	params.Set("from", from.Format("2006-01-02"))
 	params.Set("to", to.Format("2006-01-02"))
 	params.Set("apikey", c.apiKey)
 
-	endpoint := fmt.Sprintf("%s/historical-price-eod/full/%s?%s", c.baseURL, symbol, params.Encode())
+	endpoint := fmt.Sprintf("%s/historical-price-eod/full?%s", c.baseURL, params.Encode())
 	resp, err := c.doGet(endpoint)
 	if err != nil {
 		return nil, err
@@ -273,7 +276,11 @@ func (c *Client) GetHistoricalPrices(symbol string, from, to time.Time) ([]dca.H
 		if err != nil {
 			continue
 		}
-		prices = append(prices, dca.HistoricalPrice{Date: t, AdjClose: h.AdjClose})
+		price := h.AdjClose
+		if price == 0 {
+			price = h.Close
+		}
+		prices = append(prices, dca.HistoricalPrice{Date: t, AdjClose: price})
 	}
 	return prices, nil
 }
