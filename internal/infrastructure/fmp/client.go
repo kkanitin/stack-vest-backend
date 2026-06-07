@@ -211,6 +211,10 @@ type fmpHistoricalPoint struct {
 	Date     string  `json:"date"`
 	AdjClose float64 `json:"adjClose"`
 	Close    float64 `json:"close"`
+	Open     float64 `json:"open"`
+	High     float64 `json:"high"`
+	Low      float64 `json:"low"`
+	Volume   float64 `json:"volume"`
 }
 
 // decodeHistorical handles both FMP response shapes:
@@ -319,6 +323,118 @@ func (c *Client) GetHistoryClose(symbol string, from, to time.Time) ([]stock.His
 
 var _ stock.HistoryFetcher = (*Client)(nil)
 
+func (c *Client) GetDailyOHLCV(symbol string, from, to time.Time) ([]stock.DetailPoint, error) {
+	params := url.Values{}
+	params.Set("from", from.Format("2006-01-02"))
+	params.Set("to", to.Format("2006-01-02"))
+	params.Set("apikey", c.apiKey)
+
+	endpoint := fmt.Sprintf("%s/historical-price-eod/full/%s?%s", c.baseURL, symbol, params.Encode())
+	resp, err := c.doGet(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := decodeHistorical(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, stock.ErrSymbolNotFound
+	}
+
+	// FMP returns descending; reverse to ascending
+	points := make([]stock.DetailPoint, 0, len(raw))
+	for i := len(raw) - 1; i >= 0; i-- {
+		h := raw[i]
+		points = append(points, stock.DetailPoint{
+			Date:   h.Date,
+			Open:   h.Open,
+			High:   h.High,
+			Low:    h.Low,
+			Close:  h.Close,
+			Volume: h.Volume,
+		})
+	}
+	return points, nil
+}
+
+type fmpIntradayPoint struct {
+	Date   string  `json:"date"`
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Volume float64 `json:"volume"`
+}
+
+func (c *Client) GetIntradayOHLCV(symbol string) ([]stock.DetailPoint, error) {
+	params := url.Values{}
+	params.Set("apikey", c.apiKey)
+
+	endpoint := fmt.Sprintf("%s/historical-chart/5min/%s?%s", c.baseURL, symbol, params.Encode())
+	resp, err := c.doGet(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var raw []fmpIntradayPoint
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, stock.ErrSymbolNotFound
+	}
+
+	// FMP returns descending; reverse to ascending
+	points := make([]stock.DetailPoint, 0, len(raw))
+	for i := len(raw) - 1; i >= 0; i-- {
+		h := raw[i]
+		points = append(points, stock.DetailPoint{
+			Date:   h.Date,
+			Open:   h.Open,
+			High:   h.High,
+			Low:    h.Low,
+			Close:  h.Close,
+			Volume: h.Volume,
+		})
+	}
+	return points, nil
+}
+
+type fmpProfile struct {
+	Symbol      string `json:"symbol"`
+	CompanyName string `json:"companyName"`
+	Currency    string `json:"currency"`
+}
+
+func (c *Client) GetProfile(symbol string) (*stock.AssetProfile, error) {
+	params := url.Values{}
+	params.Set("symbol", symbol)
+	params.Set("apikey", c.apiKey)
+
+	resp, err := c.doGet(c.baseURL + "/profile?" + params.Encode())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var raw []fmpProfile
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, stock.ErrSymbolNotFound
+	}
+
+	r := raw[0]
+	return &stock.AssetProfile{Name: r.CompanyName, Currency: r.Currency}, nil
+}
+
+var _ stock.DetailFetcher = (*Client)(nil)
+
 type fmpMostActive struct {
 	Symbol string `json:"symbol"`
 	Name   string `json:"name"`
@@ -354,6 +470,49 @@ func (c *Client) GetMostActiveStocks(n int) ([]MostActiveStock, error) {
 	result := make([]MostActiveStock, 0, len(raw))
 	for _, r := range raw {
 		result = append(result, MostActiveStock{Symbol: r.Symbol, Name: r.Name})
+	}
+	return result, nil
+}
+
+type fmpMarketMover struct {
+	Symbol            string  `json:"symbol"`
+	ChangesPercentage float64 `json:"changesPercentage"`
+}
+
+// MarketMover is a minimal summary shared by GetBiggestGainers/GetBiggestLosers.
+type MarketMover struct {
+	Symbol        string
+	ChangePercent float64
+}
+
+// GetBiggestGainers returns today's biggest-gaining stocks from FMP.
+func (c *Client) GetBiggestGainers() ([]MarketMover, error) {
+	return c.getMarketMovers("/biggest-gainers")
+}
+
+// GetBiggestLosers returns today's biggest-losing stocks from FMP.
+func (c *Client) GetBiggestLosers() ([]MarketMover, error) {
+	return c.getMarketMovers("/biggest-losers")
+}
+
+func (c *Client) getMarketMovers(path string) ([]MarketMover, error) {
+	params := url.Values{}
+	params.Set("apikey", c.apiKey)
+
+	resp, err := c.doGet(c.baseURL + path + "?" + params.Encode())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var raw []fmpMarketMover
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	}
+
+	result := make([]MarketMover, 0, len(raw))
+	for _, r := range raw {
+		result = append(result, MarketMover{Symbol: r.Symbol, ChangePercent: r.ChangesPercentage})
 	}
 	return result, nil
 }

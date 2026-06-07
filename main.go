@@ -19,6 +19,7 @@ import (
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 	dcauc "github.com/kanitin/stackvest/backend/internal/usecase/dca"
 	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
+	sentimentuc "github.com/kanitin/stackvest/backend/internal/usecase/sentiment"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
 	useruc "github.com/kanitin/stackvest/backend/internal/usecase/user"
 	watchlistuc "github.com/kanitin/stackvest/backend/internal/usecase/watchlist"
@@ -58,7 +59,10 @@ func main() {
 	priceChangeUC := stockuc.NewPriceChangeUseCase(avClient)
 	quoteUC := stockuc.NewQuoteUseCase(avClient)
 	historyUC := stockuc.NewHistoryUseCase(avClient)
-	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC, quoteUC, historyUC)
+	batchPriceChangeUC := stockuc.NewBatchPriceChangeUseCase(avClient)
+	batchHistoryUC := stockuc.NewBatchHistoryUseCase(avClient)
+	detailUC := stockuc.NewDetailUseCase(avClient)
+	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC, quoteUC, historyUC, batchPriceChangeUC, batchHistoryUC, detailUC)
 
 	googleUC := authuc.NewGoogleUseCase(
 		cfg.Auth.Google.ClientID,
@@ -84,7 +88,10 @@ func main() {
 
 	popularHandler := handler.NewPopularHandler(avClient)
 
-	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
+	sentimentUC := sentimentuc.NewUseCase(avClient, 6*time.Hour)
+	sentimentHandler := handler.NewSentimentHandler(sentimentUC)
+
+	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, sentimentHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Server.Port,
