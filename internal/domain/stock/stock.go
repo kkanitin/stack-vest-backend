@@ -6,6 +6,7 @@ import (
 )
 
 var ErrSymbolNotFound = errors.New("symbol not found")
+var ErrTooManySymbols = errors.New("symbols must not exceed 10 items")
 
 type Match struct {
 	Symbol   string `json:"symbol"`
@@ -101,4 +102,109 @@ type History struct {
 
 type HistoryFetcher interface {
 	GetHistoryClose(symbol string, from, to time.Time) ([]HistoryPoint, error)
+}
+
+type BatchHistoryRange string
+
+const (
+	BatchRange7D  BatchHistoryRange = "7D"
+	BatchRange30D BatchHistoryRange = "30D"
+	BatchRange90D BatchHistoryRange = "90D"
+	BatchRange1Y  BatchHistoryRange = "1Y"
+	BatchRangeAll BatchHistoryRange = "All"
+)
+
+func (r BatchHistoryRange) IsValid() bool {
+	switch r {
+	case BatchRange7D, BatchRange30D, BatchRange90D, BatchRange1Y, BatchRangeAll:
+		return true
+	}
+	return false
+}
+
+func (r BatchHistoryRange) Days() int {
+	switch r {
+	case BatchRange7D:
+		return 7
+	case BatchRange30D:
+		return 30
+	case BatchRange90D:
+		return 90
+	case BatchRange1Y:
+		return 365
+	case BatchRangeAll:
+		return 1825
+	}
+	return 0
+}
+
+type BatchHistoryItem struct {
+	Symbol string         `json:"symbol"`
+	Range  string         `json:"range"`
+	Points []HistoryPoint `json:"points"`
+}
+
+type DetailRange string
+
+const (
+	DetailRange1D  DetailRange = "1D"
+	DetailRange1W  DetailRange = "1W"
+	DetailRange1M  DetailRange = "1M"
+	DetailRange1Y  DetailRange = "1Y"
+	DetailRangeAll DetailRange = "All"
+)
+
+func (r DetailRange) IsValid() bool {
+	switch r {
+	case DetailRange1D, DetailRange1W, DetailRange1M, DetailRange1Y, DetailRangeAll:
+		return true
+	}
+	return false
+}
+
+func (r DetailRange) IsIntraday() bool {
+	return r == DetailRange1D
+}
+
+func (r DetailRange) Days() int {
+	switch r {
+	case DetailRange1W:
+		return 7
+	case DetailRange1M:
+		return 30
+	case DetailRange1Y:
+		return 365
+	case DetailRangeAll:
+		return 1825
+	}
+	return 0
+}
+
+type DetailPoint struct {
+	Date   string  `json:"date"`
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Volume float64 `json:"volume"`
+}
+
+type AssetDetail struct {
+	Symbol   string        `json:"symbol"`
+	Name     string        `json:"name"`
+	Currency string        `json:"currency"`
+	Range    DetailRange   `json:"range"`
+	Interval string        `json:"interval"`
+	Points   []DetailPoint `json:"points"`
+}
+
+type AssetProfile struct {
+	Name     string
+	Currency string
+}
+
+type DetailFetcher interface {
+	GetProfile(symbol string) (*AssetProfile, error)
+	GetDailyOHLCV(symbol string, from, to time.Time) ([]DetailPoint, error)
+	GetIntradayOHLCV(symbol string) ([]DetailPoint, error)
 }

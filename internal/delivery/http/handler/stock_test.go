@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -38,10 +39,54 @@ func (m *mockStockHistoryUC) Execute(symbol string, r domain.HistoryRange) (*dom
 	return nil, nil
 }
 
+type mockStockBatchPriceChangeUC struct {
+	result []*domain.PriceChange
+	err    error
+}
+
+func (m *mockStockBatchPriceChangeUC) Execute(ctx context.Context, symbolsParam string) ([]*domain.PriceChange, error) {
+	return m.result, m.err
+}
+
+type mockStockBatchHistoryUC struct {
+	result []domain.BatchHistoryItem
+	err    error
+}
+
+func (m *mockStockBatchHistoryUC) Execute(ctx context.Context, symbolsParam string, r domain.BatchHistoryRange) ([]domain.BatchHistoryItem, error) {
+	return m.result, m.err
+}
+
+type mockStockDetailUC struct {
+	result *domain.AssetDetail
+	err    error
+}
+
+func (m *mockStockDetailUC) Execute(ctx context.Context, symbol string, r domain.DetailRange) (*domain.AssetDetail, error) {
+	return m.result, m.err
+}
+
 func newStockRouter(uc stockSearchUseCase) *gin.Engine {
+	return newStockRouterFull(uc, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{}, &mockStockDetailUC{})
+}
+
+func newStockRouterFull(
+	search stockSearchUseCase,
+	batchPriceChange stockBatchPriceChangeUseCase,
+	batchHistory stockBatchHistoryUseCase,
+	detail stockDetailUseCase,
+) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	NewStockHandler(uc, &mockStockPriceChangeUC{}, &mockStockQuoteUC{}, &mockStockHistoryUC{}).RegisterRoutes(r.Group(""))
+	NewStockHandler(
+		search,
+		&mockStockPriceChangeUC{},
+		&mockStockQuoteUC{},
+		&mockStockHistoryUC{},
+		batchPriceChange,
+		batchHistory,
+		detail,
+	).RegisterRoutes(r.Group(""))
 	return r
 }
 
@@ -59,6 +104,81 @@ func TestSearch(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newStockRouter(&mockStockSearchUC{err: tc.mockErr})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d", tc.wantCode, w.Code)
+			}
+		})
+	}
+}
+
+func TestGetBatchPriceChanges(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		mockErr  error
+		wantCode int
+	}{
+		{"missing symbols", "/stocks/price-changes", nil, http.StatusBadRequest},
+		{"too many symbols", "/stocks/price-changes?symbols=A,B", domain.ErrTooManySymbols, http.StatusBadRequest},
+		{"use-case error", "/stocks/price-changes?symbols=AAPL", errors.New("upstream error"), http.StatusInternalServerError},
+		{"success", "/stocks/price-changes?symbols=AAPL,MSFT", nil, http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{err: tc.mockErr}, &mockStockBatchHistoryUC{}, &mockStockDetailUC{})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d", tc.wantCode, w.Code)
+			}
+		})
+	}
+}
+
+func TestGetBatchHistory(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		mockErr  error
+		wantCode int
+	}{
+		{"missing symbols", "/stocks/history", nil, http.StatusBadRequest},
+		{"missing range", "/stocks/history?symbols=AAPL", nil, http.StatusBadRequest},
+		{"invalid range", "/stocks/history?symbols=AAPL&range=invalid", nil, http.StatusBadRequest},
+		{"too many symbols", "/stocks/history?symbols=A,B&range=7D", domain.ErrTooManySymbols, http.StatusBadRequest},
+		{"use-case error", "/stocks/history?symbols=AAPL&range=7D", errors.New("upstream error"), http.StatusInternalServerError},
+		{"success", "/stocks/history?symbols=AAPL,MSFT&range=7D", nil, http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{err: tc.mockErr}, &mockStockDetailUC{})
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d", tc.wantCode, w.Code)
+			}
+		})
+	}
+}
+
+func TestGetDetail(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		mockErr  error
+		wantCode int
+	}{
+		{"missing range", "/stocks/AAPL/detail", nil, http.StatusBadRequest},
+		{"invalid range", "/stocks/AAPL/detail?range=invalid", nil, http.StatusBadRequest},
+		{"symbol not found", "/stocks/ZZZZ/detail?range=1D", domain.ErrSymbolNotFound, http.StatusNotFound},
+		{"use-case error", "/stocks/AAPL/detail?range=1D", errors.New("upstream error"), http.StatusInternalServerError},
+		{"success", "/stocks/AAPL/detail?range=1D", nil, http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{}, &mockStockDetailUC{result: &domain.AssetDetail{}, err: tc.mockErr})
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
 			if w.Code != tc.wantCode {

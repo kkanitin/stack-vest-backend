@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kanitin/stackvest/backend/internal/domain/stock"
 )
 
 func TestNewClient(t *testing.T) {
@@ -248,5 +250,202 @@ func TestSearchSymbolEmptyResult(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Errorf("expected 0 matches, got %d", len(matches))
+	}
+}
+
+func TestGetDailyOHLCV(t *testing.T) {
+	fixture := []fmpHistoricalPoint{
+		{Date: "2024-01-03", Open: 186.0, High: 187.0, Low: 184.5, Close: 185.0, Volume: 2000},
+		{Date: "2024-01-02", Open: 183.0, High: 184.0, Low: 182.0, Close: 183.5, Volume: 1500},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	points, err := client.GetDailyOHLCV("AAPL", mustParseDate("2024-01-01"), mustParseDate("2024-01-05"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("expected 2 points, got %d", len(points))
+	}
+	// FMP returns descending; client should reverse to ascending
+	if points[0].Date != "2024-01-02" || points[1].Date != "2024-01-03" {
+		t.Errorf("expected ascending order, got %s then %s", points[0].Date, points[1].Date)
+	}
+	if points[0].Open != 183.0 || points[0].High != 184.0 || points[0].Low != 182.0 || points[0].Volume != 1500 {
+		t.Errorf("OHLCV fields not mapped correctly: %+v", points[0])
+	}
+}
+
+func TestGetDailyOHLCV_EmptyResultReturnsSymbolNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	_, err := client.GetDailyOHLCV("ZZZZ", mustParseDate("2024-01-01"), mustParseDate("2024-01-05"))
+	if !errors.Is(err, stock.ErrSymbolNotFound) {
+		t.Fatalf("expected ErrSymbolNotFound, got %v", err)
+	}
+}
+
+func TestGetIntradayOHLCV(t *testing.T) {
+	fixture := []fmpIntradayPoint{
+		{Date: "2024-01-03 09:35:00", Open: 186.0, High: 187.0, Low: 185.5, Close: 186.5, Volume: 2000},
+		{Date: "2024-01-03 09:30:00", Open: 185.0, High: 186.0, Low: 184.5, Close: 185.5, Volume: 1500},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	points, err := client.GetIntradayOHLCV("AAPL")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("expected 2 points, got %d", len(points))
+	}
+	// FMP returns descending; client should reverse to ascending
+	if points[0].Date != "2024-01-03 09:30:00" || points[1].Date != "2024-01-03 09:35:00" {
+		t.Errorf("expected ascending order, got %s then %s", points[0].Date, points[1].Date)
+	}
+}
+
+func TestGetIntradayOHLCV_EmptyResultReturnsSymbolNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	_, err := client.GetIntradayOHLCV("ZZZZ")
+	if !errors.Is(err, stock.ErrSymbolNotFound) {
+		t.Fatalf("expected ErrSymbolNotFound, got %v", err)
+	}
+}
+
+func TestGetProfile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"symbol":"AAPL","companyName":"Apple Inc.","currency":"USD"}]`))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	profile, err := client.GetProfile("AAPL")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if profile.Name != "Apple Inc." || profile.Currency != "USD" {
+		t.Errorf("expected Apple Inc./USD, got %+v", profile)
+	}
+}
+
+func TestGetProfile_EmptyResultReturnsSymbolNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	_, err := client.GetProfile("ZZZZ")
+	if !errors.Is(err, stock.ErrSymbolNotFound) {
+		t.Fatalf("expected ErrSymbolNotFound, got %v", err)
+	}
+}
+
+func TestGetBiggestGainers(t *testing.T) {
+	fixture := []fmpMarketMover{
+		{Symbol: "AAPL", ChangesPercentage: 5.5},
+		{Symbol: "TSLA", ChangesPercentage: 3.2},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/biggest-gainers") {
+			t.Errorf("expected path ending in /biggest-gainers, got %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	movers, err := client.GetBiggestGainers()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(movers) != 2 {
+		t.Fatalf("expected 2 movers, got %d", len(movers))
+	}
+	if movers[0].Symbol != "AAPL" || movers[0].ChangePercent != 5.5 {
+		t.Errorf("unexpected first mover: %+v", movers[0])
+	}
+}
+
+func TestGetBiggestLosers(t *testing.T) {
+	fixture := []fmpMarketMover{
+		{Symbol: "META", ChangesPercentage: -4.1},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/biggest-losers") {
+			t.Errorf("expected path ending in /biggest-losers, got %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	movers, err := client.GetBiggestLosers()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(movers) != 1 {
+		t.Fatalf("expected 1 mover, got %d", len(movers))
+	}
+	if movers[0].Symbol != "META" || movers[0].ChangePercent != -4.1 {
+		t.Errorf("unexpected mover: %+v", movers[0])
+	}
+}
+
+func TestGetMarketMovers_EmptyResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	movers, err := client.GetBiggestGainers()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(movers) != 0 {
+		t.Fatalf("expected empty slice, got %d movers", len(movers))
+	}
+}
+
+func TestGetMarketMovers_DecodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	if _, err := client.GetBiggestGainers(); err == nil {
+		t.Fatal("expected decode error, got nil")
+	}
+}
+
+func TestGetMarketMovers_RateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	if _, err := client.GetBiggestGainers(); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("expected ErrRateLimited, got %v", err)
 	}
 }
