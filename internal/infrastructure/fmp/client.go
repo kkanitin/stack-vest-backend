@@ -323,94 +323,29 @@ func (c *Client) GetHistoryClose(symbol string, from, to time.Time) ([]stock.His
 
 var _ stock.HistoryFetcher = (*Client)(nil)
 
-func (c *Client) GetDailyOHLCV(symbol string, from, to time.Time) ([]stock.DetailPoint, error) {
-	params := url.Values{}
-	params.Set("from", from.Format("2006-01-02"))
-	params.Set("to", to.Format("2006-01-02"))
-	params.Set("apikey", c.apiKey)
-
-	endpoint := fmt.Sprintf("%s/historical-price-eod/full/%s?%s", c.baseURL, symbol, params.Encode())
-	resp, err := c.doGet(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	raw, err := decodeHistorical(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) == 0 {
-		return nil, stock.ErrSymbolNotFound
-	}
-
-	// FMP returns descending; reverse to ascending
-	points := make([]stock.DetailPoint, 0, len(raw))
-	for i := len(raw) - 1; i >= 0; i-- {
-		h := raw[i]
-		points = append(points, stock.DetailPoint{
-			Date:   h.Date,
-			Open:   h.Open,
-			High:   h.High,
-			Low:    h.Low,
-			Close:  h.Close,
-			Volume: h.Volume,
-		})
-	}
-	return points, nil
-}
-
-type fmpIntradayPoint struct {
-	Date   string  `json:"date"`
-	Open   float64 `json:"open"`
-	High   float64 `json:"high"`
-	Low    float64 `json:"low"`
-	Close  float64 `json:"close"`
-	Volume float64 `json:"volume"`
-}
-
-func (c *Client) GetIntradayOHLCV(symbol string) ([]stock.DetailPoint, error) {
-	params := url.Values{}
-	params.Set("apikey", c.apiKey)
-
-	endpoint := fmt.Sprintf("%s/historical-chart/5min/%s?%s", c.baseURL, symbol, params.Encode())
-	resp, err := c.doGet(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var raw []fmpIntradayPoint
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("fmp decode failed: %w", err)
-	}
-	if len(raw) == 0 {
-		return nil, stock.ErrSymbolNotFound
-	}
-
-	// FMP returns descending; reverse to ascending
-	points := make([]stock.DetailPoint, 0, len(raw))
-	for i := len(raw) - 1; i >= 0; i-- {
-		h := raw[i]
-		points = append(points, stock.DetailPoint{
-			Date:   h.Date,
-			Open:   h.Open,
-			High:   h.High,
-			Low:    h.Low,
-			Close:  h.Close,
-			Volume: h.Volume,
-		})
-	}
-	return points, nil
-}
-
 type fmpProfile struct {
-	Symbol      string `json:"symbol"`
-	CompanyName string `json:"companyName"`
-	Currency    string `json:"currency"`
+	Symbol            string  `json:"symbol"`
+	Price             float64 `json:"price"`
+	MarketCap         float64 `json:"marketCap"`
+	Beta              float64 `json:"beta"`
+	CompanyName       string  `json:"companyName"`
+	Currency          string  `json:"currency"`
+	Exchange          string  `json:"exchange"`
+	ExchangeFullName  string  `json:"exchangeFullName"`
+	Industry          string  `json:"industry"`
+	Website           string  `json:"website"`
+	Description       string  `json:"description"`
+	CEO               string  `json:"ceo"`
+	Sector            string  `json:"sector"`
+	Country           string  `json:"country"`
+	FullTimeEmployees string  `json:"fullTimeEmployees"`
+	Image             string  `json:"image"`
+	IPODate           string  `json:"ipoDate"`
+	IsEtf             bool    `json:"isEtf"`
+	IsActivelyTrading bool    `json:"isActivelyTrading"`
 }
 
-func (c *Client) GetProfile(symbol string) (*stock.AssetProfile, error) {
+func (c *Client) GetProfile(symbol string) (*stock.CompanyProfile, error) {
 	params := url.Values{}
 	params.Set("symbol", symbol)
 	params.Set("apikey", c.apiKey)
@@ -430,10 +365,30 @@ func (c *Client) GetProfile(symbol string) (*stock.AssetProfile, error) {
 	}
 
 	r := raw[0]
-	return &stock.AssetProfile{Name: r.CompanyName, Currency: r.Currency}, nil
+	return &stock.CompanyProfile{
+		Symbol:            r.Symbol,
+		CompanyName:       r.CompanyName,
+		Currency:          r.Currency,
+		Exchange:          r.Exchange,
+		ExchangeFullName:  r.ExchangeFullName,
+		Industry:          r.Industry,
+		Sector:            r.Sector,
+		Country:           r.Country,
+		CEO:               r.CEO,
+		Website:           r.Website,
+		Description:       r.Description,
+		Image:             r.Image,
+		Price:             r.Price,
+		MarketCap:         r.MarketCap,
+		Beta:              r.Beta,
+		IPODate:           r.IPODate,
+		FullTimeEmployees: r.FullTimeEmployees,
+		IsEtf:             r.IsEtf,
+		IsActivelyTrading: r.IsActivelyTrading,
+	}, nil
 }
 
-var _ stock.DetailFetcher = (*Client)(nil)
+var _ stock.ProfileFetcher = (*Client)(nil)
 
 type fmpMostActive struct {
 	Symbol string `json:"symbol"`

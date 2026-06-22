@@ -61,8 +61,8 @@ func main() {
 	historyUC := stockuc.NewHistoryUseCase(avClient)
 	batchPriceChangeUC := stockuc.NewBatchPriceChangeUseCase(avClient)
 	batchHistoryUC := stockuc.NewBatchHistoryUseCase(avClient)
-	detailUC := stockuc.NewDetailUseCase(avClient)
-	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC, quoteUC, historyUC, batchPriceChangeUC, batchHistoryUC, detailUC)
+	profileUC := stockuc.NewProfileUseCase(avClient)
+	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC, quoteUC, historyUC, batchPriceChangeUC, batchHistoryUC, profileUC)
 
 	googleUC := authuc.NewGoogleUseCase(
 		cfg.Auth.Google.ClientID,

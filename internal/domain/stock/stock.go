@@ -144,67 +144,28 @@ type BatchHistoryItem struct {
 	Points []HistoryPoint `json:"points"`
 }
 
-type DetailRange string
-
-const (
-	DetailRange1D  DetailRange = "1D"
-	DetailRange1W  DetailRange = "1W"
-	DetailRange1M  DetailRange = "1M"
-	DetailRange1Y  DetailRange = "1Y"
-	DetailRangeAll DetailRange = "All"
-)
-
-func (r DetailRange) IsValid() bool {
-	switch r {
-	case DetailRange1D, DetailRange1W, DetailRange1M, DetailRange1Y, DetailRangeAll:
-		return true
-	}
-	return false
+type CompanyProfile struct {
+	Symbol            string  `json:"symbol"`
+	CompanyName       string  `json:"companyName"`
+	Currency          string  `json:"currency"`
+	Exchange          string  `json:"exchange"`
+	ExchangeFullName  string  `json:"exchangeFullName"`
+	Industry          string  `json:"industry"`
+	Sector            string  `json:"sector"`
+	Country           string  `json:"country"`
+	CEO               string  `json:"ceo"`
+	Website           string  `json:"website"`
+	Description       string  `json:"description"`
+	Image             string  `json:"image"`
+	Price             float64 `json:"price"`
+	MarketCap         float64 `json:"marketCap"`
+	Beta              float64 `json:"beta"`
+	IPODate           string  `json:"ipoDate"`
+	FullTimeEmployees string  `json:"fullTimeEmployees"`
+	IsEtf             bool    `json:"isEtf"`
+	IsActivelyTrading bool    `json:"isActivelyTrading"`
 }
 
-func (r DetailRange) IsIntraday() bool {
-	return r == DetailRange1D
-}
-
-func (r DetailRange) Days() int {
-	switch r {
-	case DetailRange1W:
-		return 7
-	case DetailRange1M:
-		return 30
-	case DetailRange1Y:
-		return 365
-	case DetailRangeAll:
-		return 1825
-	}
-	return 0
-}
-
-type DetailPoint struct {
-	Date   string  `json:"date"`
-	Open   float64 `json:"open"`
-	High   float64 `json:"high"`
-	Low    float64 `json:"low"`
-	Close  float64 `json:"close"`
-	Volume float64 `json:"volume"`
-}
-
-type AssetDetail struct {
-	Symbol   string        `json:"symbol"`
-	Name     string        `json:"name"`
-	Currency string        `json:"currency"`
-	Range    DetailRange   `json:"range"`
-	Interval string        `json:"interval"`
-	Points   []DetailPoint `json:"points"`
-}
-
-type AssetProfile struct {
-	Name     string
-	Currency string
-}
-
-type DetailFetcher interface {
-	GetProfile(symbol string) (*AssetProfile, error)
-	GetDailyOHLCV(symbol string, from, to time.Time) ([]DetailPoint, error)
-	GetIntradayOHLCV(symbol string) ([]DetailPoint, error)
+type ProfileFetcher interface {
+	GetProfile(symbol string) (*CompanyProfile, error)
 }

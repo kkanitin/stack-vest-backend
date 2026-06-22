@@ -253,86 +253,34 @@ func TestSearchSymbolEmptyResult(t *testing.T) {
 	}
 }
 
-func TestGetDailyOHLCV(t *testing.T) {
-	fixture := []fmpHistoricalPoint{
-		{Date: "2024-01-03", Open: 186.0, High: 187.0, Low: 184.5, Close: 185.0, Volume: 2000},
-		{Date: "2024-01-02", Open: 183.0, High: 184.0, Low: 182.0, Close: 183.5, Volume: 1500},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
-	}))
-	defer srv.Close()
-
-	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
-	points, err := client.GetDailyOHLCV("AAPL", mustParseDate("2024-01-01"), mustParseDate("2024-01-05"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(points) != 2 {
-		t.Fatalf("expected 2 points, got %d", len(points))
-	}
-	// FMP returns descending; client should reverse to ascending
-	if points[0].Date != "2024-01-02" || points[1].Date != "2024-01-03" {
-		t.Errorf("expected ascending order, got %s then %s", points[0].Date, points[1].Date)
-	}
-	if points[0].Open != 183.0 || points[0].High != 184.0 || points[0].Low != 182.0 || points[0].Volume != 1500 {
-		t.Errorf("OHLCV fields not mapped correctly: %+v", points[0])
-	}
-}
-
-func TestGetDailyOHLCV_EmptyResultReturnsSymbolNotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("[]"))
-	}))
-	defer srv.Close()
-
-	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
-	_, err := client.GetDailyOHLCV("ZZZZ", mustParseDate("2024-01-01"), mustParseDate("2024-01-05"))
-	if !errors.Is(err, stock.ErrSymbolNotFound) {
-		t.Fatalf("expected ErrSymbolNotFound, got %v", err)
-	}
-}
-
-func TestGetIntradayOHLCV(t *testing.T) {
-	fixture := []fmpIntradayPoint{
-		{Date: "2024-01-03 09:35:00", Open: 186.0, High: 187.0, Low: 185.5, Close: 186.5, Volume: 2000},
-		{Date: "2024-01-03 09:30:00", Open: 185.0, High: 186.0, Low: 184.5, Close: 185.5, Volume: 1500},
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(fixture)
-	}))
-	defer srv.Close()
-
-	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
-	points, err := client.GetIntradayOHLCV("AAPL")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(points) != 2 {
-		t.Fatalf("expected 2 points, got %d", len(points))
-	}
-	// FMP returns descending; client should reverse to ascending
-	if points[0].Date != "2024-01-03 09:30:00" || points[1].Date != "2024-01-03 09:35:00" {
-		t.Errorf("expected ascending order, got %s then %s", points[0].Date, points[1].Date)
-	}
-}
-
-func TestGetIntradayOHLCV_EmptyResultReturnsSymbolNotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("[]"))
-	}))
-	defer srv.Close()
-
-	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
-	_, err := client.GetIntradayOHLCV("ZZZZ")
-	if !errors.Is(err, stock.ErrSymbolNotFound) {
-		t.Fatalf("expected ErrSymbolNotFound, got %v", err)
-	}
-}
-
 func TestGetProfile(t *testing.T) {
+	// Raw JSON literal mirroring the real FMP /stable/profile response so the
+	// struct tags are actually exercised against FMP's wire field names/types.
+	const body = `[{
+		"symbol": "AAPL",
+		"price": 232.8,
+		"marketCap": 3500823120000,
+		"beta": 1.24,
+		"companyName": "Apple Inc.",
+		"currency": "USD",
+		"exchange": "NASDAQ",
+		"exchangeFullName": "NASDAQ Global Select",
+		"industry": "Consumer Electronics",
+		"website": "https://www.apple.com",
+		"description": "Apple Inc. designs, manufactures and markets smartphones.",
+		"ceo": "Mr. Timothy D. Cook",
+		"sector": "Technology",
+		"country": "US",
+		"fullTimeEmployees": "164000",
+		"image": "https://images.financialmodelingprep.com/symbol/AAPL.png",
+		"ipoDate": "1980-12-12",
+		"isEtf": false,
+		"isActivelyTrading": true
+	}]`
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`[{"symbol":"AAPL","companyName":"Apple Inc.","currency":"USD"}]`))
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(body))
 	}))
 	defer srv.Close()
 
@@ -341,8 +289,38 @@ func TestGetProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if profile.Name != "Apple Inc." || profile.Currency != "USD" {
-		t.Errorf("expected Apple Inc./USD, got %+v", profile)
+	if profile.Symbol != "AAPL" {
+		t.Errorf("expected symbol AAPL, got %s", profile.Symbol)
+	}
+	if profile.CompanyName != "Apple Inc." {
+		t.Errorf("expected company name Apple Inc., got %s", profile.CompanyName)
+	}
+	if profile.Currency != "USD" {
+		t.Errorf("expected currency USD, got %s", profile.Currency)
+	}
+	if profile.Exchange != "NASDAQ" || profile.ExchangeFullName != "NASDAQ Global Select" {
+		t.Errorf("exchange fields not mapped: %q / %q", profile.Exchange, profile.ExchangeFullName)
+	}
+	if profile.Industry != "Consumer Electronics" || profile.Sector != "Technology" {
+		t.Errorf("industry/sector not mapped: %q / %q", profile.Industry, profile.Sector)
+	}
+	if profile.CEO != "Mr. Timothy D. Cook" {
+		t.Errorf("expected CEO Mr. Timothy D. Cook, got %s", profile.CEO)
+	}
+	if profile.Country != "US" {
+		t.Errorf("expected country US, got %s", profile.Country)
+	}
+	if profile.FullTimeEmployees != "164000" {
+		t.Errorf("expected fullTimeEmployees 164000, got %s", profile.FullTimeEmployees)
+	}
+	if profile.Price != 232.8 || profile.MarketCap != 3500823120000 || profile.Beta != 1.24 {
+		t.Errorf("numeric fields not mapped: price=%v marketCap=%v beta=%v", profile.Price, profile.MarketCap, profile.Beta)
+	}
+	if profile.IPODate != "1980-12-12" {
+		t.Errorf("expected ipoDate 1980-12-12, got %s", profile.IPODate)
+	}
+	if profile.IsEtf != false || profile.IsActivelyTrading != true {
+		t.Errorf("bool flags not mapped: isEtf=%v isActivelyTrading=%v", profile.IsEtf, profile.IsActivelyTrading)
 	}
 }
 
