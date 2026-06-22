@@ -296,8 +296,9 @@ func (c *Client) GetHistoryClose(symbol string, from, to time.Time) ([]stock.His
 	params.Set("from", from.Format("2006-01-02"))
 	params.Set("to", to.Format("2006-01-02"))
 	params.Set("apikey", c.apiKey)
+	params.Set("symbol", symbol)
 
-	endpoint := fmt.Sprintf("%s/historical-price-eod/full/%s?%s", c.baseURL, symbol, params.Encode())
+	endpoint := fmt.Sprintf("%s/historical-price-eod/full?%s", c.baseURL, params.Encode())
 	resp, err := c.doGet(endpoint)
 	if err != nil {
 		return nil, err
