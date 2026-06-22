@@ -35,8 +35,8 @@ type stockBatchHistoryUseCase interface {
 	Execute(ctx context.Context, symbolsParam string, r domain.BatchHistoryRange) ([]domain.BatchHistoryItem, error)
 }
 
-type stockDetailUseCase interface {
-	Execute(ctx context.Context, symbol string, r domain.DetailRange) (*domain.AssetDetail, error)
+type stockProfileUseCase interface {
+	Execute(symbol string) (*domain.CompanyProfile, error)
 }
 
 type StockHandler struct {
@@ -46,7 +46,7 @@ type StockHandler struct {
 	historyUC          stockHistoryUseCase
 	batchPriceChangeUC stockBatchPriceChangeUseCase
 	batchHistoryUC     stockBatchHistoryUseCase
-	detailUC           stockDetailUseCase
+	profileUC          stockProfileUseCase
 }
 
 func NewStockHandler(
@@ -56,7 +56,7 @@ func NewStockHandler(
 	h stockHistoryUseCase,
 	bp stockBatchPriceChangeUseCase,
 	bh stockBatchHistoryUseCase,
-	d stockDetailUseCase,
+	pr stockProfileUseCase,
 ) *StockHandler {
 	return &StockHandler{
 		searchUC:           s,
@@ -65,7 +65,7 @@ func NewStockHandler(
 		historyUC:          h,
 		batchPriceChangeUC: bp,
 		batchHistoryUC:     bh,
-		detailUC:           d,
+		profileUC:          pr,
 	}
 }
 
@@ -77,7 +77,7 @@ func (h *StockHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	stocks.GET("/:symbol/price-change", h.GetPriceChange)
 	stocks.GET("/:symbol/quote", h.GetQuote)
 	stocks.GET("/:symbol/history", h.GetHistory)
-	stocks.GET("/:symbol/detail", h.GetDetail)
+	stocks.GET("/:symbol/profile", h.GetProfile)
 }
 
 func (h *StockHandler) Search(c *gin.Context) {
@@ -111,12 +111,14 @@ func (h *StockHandler) Search(c *gin.Context) {
 	results := all[offset:end]
 	currentPageCount := len(results)
 
-	response.OKList(c, results, response.Meta{
-		Total:            &total,
-		Page:             &page,
-		Size:             &size,
-		CurrentPageCount: &currentPageCount,
-	})
+	response.OKList(
+		c, results, response.Meta{
+			Total:            &total,
+			Page:             &page,
+			Size:             &size,
+			CurrentPageCount: &currentPageCount,
+		},
+	)
 }
 
 func (h *StockHandler) GetPriceChange(c *gin.Context) {
@@ -177,7 +179,9 @@ func (h *StockHandler) GetHistory(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "stock history failed", "symbol", symbol, "range", rangeParam, "error", err)
+		slog.ErrorContext(
+			c.Request.Context(), "stock history failed", "symbol", symbol, "range", rangeParam, "error", err,
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to fetch history")
 		return
 	}
@@ -226,7 +230,9 @@ func (h *StockHandler) GetBatchHistory(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "batch history failed", "symbols", symbolsParam, "range", rangeParam, "error", err)
+		slog.ErrorContext(
+			c.Request.Context(), "batch history failed", "symbols", symbolsParam, "range", rangeParam, "error", err,
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to fetch batch history")
 		return
 	}
@@ -234,28 +240,21 @@ func (h *StockHandler) GetBatchHistory(c *gin.Context) {
 	response.OK(c, result)
 }
 
-func (h *StockHandler) GetDetail(c *gin.Context) {
+func (h *StockHandler) GetProfile(c *gin.Context) {
 	symbol := c.Param("symbol")
 	if symbol == "" {
 		response.Err(c, http.StatusBadRequest, "path parameter 'symbol' is required")
 		return
 	}
 
-	rangeParam := c.Query("range")
-	r := domain.DetailRange(rangeParam)
-	if !r.IsValid() {
-		response.Err(c, http.StatusBadRequest, "range must be one of: 1D, 1W, 1M, 1Y, All")
-		return
-	}
-
-	result, err := h.detailUC.Execute(c.Request.Context(), symbol, r)
+	result, err := h.profileUC.Execute(symbol)
 	if errors.Is(err, domain.ErrSymbolNotFound) {
 		response.Err(c, http.StatusNotFound, "symbol not found: "+symbol)
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "stock detail failed", "symbol", symbol, "range", rangeParam, "error", err)
-		response.Err(c, http.StatusInternalServerError, "failed to fetch asset detail")
+		slog.ErrorContext(c.Request.Context(), "stock profile failed", "symbol", symbol, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to get stock profile")
 		return
 	}
 

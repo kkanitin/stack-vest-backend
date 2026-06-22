@@ -57,24 +57,24 @@ func (m *mockStockBatchHistoryUC) Execute(ctx context.Context, symbolsParam stri
 	return m.result, m.err
 }
 
-type mockStockDetailUC struct {
-	result *domain.AssetDetail
+type mockStockProfileUC struct {
+	result *domain.CompanyProfile
 	err    error
 }
 
-func (m *mockStockDetailUC) Execute(ctx context.Context, symbol string, r domain.DetailRange) (*domain.AssetDetail, error) {
+func (m *mockStockProfileUC) Execute(symbol string) (*domain.CompanyProfile, error) {
 	return m.result, m.err
 }
 
 func newStockRouter(uc stockSearchUseCase) *gin.Engine {
-	return newStockRouterFull(uc, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{}, &mockStockDetailUC{})
+	return newStockRouterFull(uc, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{}, &mockStockProfileUC{})
 }
 
 func newStockRouterFull(
 	search stockSearchUseCase,
 	batchPriceChange stockBatchPriceChangeUseCase,
 	batchHistory stockBatchHistoryUseCase,
-	detail stockDetailUseCase,
+	profile stockProfileUseCase,
 ) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -85,7 +85,7 @@ func newStockRouterFull(
 		&mockStockHistoryUC{},
 		batchPriceChange,
 		batchHistory,
-		detail,
+		profile,
 	).RegisterRoutes(r.Group(""))
 	return r
 }
@@ -127,7 +127,7 @@ func TestGetBatchPriceChanges(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{err: tc.mockErr}, &mockStockBatchHistoryUC{}, &mockStockDetailUC{})
+			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{err: tc.mockErr}, &mockStockBatchHistoryUC{}, &mockStockProfileUC{})
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
 			if w.Code != tc.wantCode {
@@ -153,7 +153,7 @@ func TestGetBatchHistory(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{err: tc.mockErr}, &mockStockDetailUC{})
+			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{err: tc.mockErr}, &mockStockProfileUC{})
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
 			if w.Code != tc.wantCode {
@@ -163,22 +163,20 @@ func TestGetBatchHistory(t *testing.T) {
 	}
 }
 
-func TestGetDetail(t *testing.T) {
+func TestGetProfile(t *testing.T) {
 	tests := []struct {
 		name     string
 		url      string
 		mockErr  error
 		wantCode int
 	}{
-		{"missing range", "/stocks/AAPL/detail", nil, http.StatusBadRequest},
-		{"invalid range", "/stocks/AAPL/detail?range=invalid", nil, http.StatusBadRequest},
-		{"symbol not found", "/stocks/ZZZZ/detail?range=1D", domain.ErrSymbolNotFound, http.StatusNotFound},
-		{"use-case error", "/stocks/AAPL/detail?range=1D", errors.New("upstream error"), http.StatusInternalServerError},
-		{"success", "/stocks/AAPL/detail?range=1D", nil, http.StatusOK},
+		{"symbol not found", "/stocks/ZZZZ/profile", domain.ErrSymbolNotFound, http.StatusNotFound},
+		{"use-case error", "/stocks/AAPL/profile", errors.New("upstream error"), http.StatusInternalServerError},
+		{"success", "/stocks/AAPL/profile", nil, http.StatusOK},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{}, &mockStockDetailUC{result: &domain.AssetDetail{}, err: tc.mockErr})
+			r := newStockRouterFull(&mockStockSearchUC{}, &mockStockBatchPriceChangeUC{}, &mockStockBatchHistoryUC{}, &mockStockProfileUC{result: &domain.CompanyProfile{}, err: tc.mockErr})
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
 			if w.Code != tc.wantCode {
