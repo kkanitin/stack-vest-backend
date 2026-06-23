@@ -55,7 +55,7 @@ func main() {
 	userRepo := userrepo.NewPostgresRepository(pool)
 
 	avClient := fmp.NewClient(cfg.ThirdPartyAPI.FMP.APIKey)
-	searchUC := stockuc.NewSearchUseCase(avClient)
+	searchUC := stockuc.NewSearchUseCase(avClient, avClient, 24*time.Hour)
 	priceChangeUC := stockuc.NewPriceChangeUseCase(avClient)
 	quoteUC := stockuc.NewQuoteUseCase(avClient)
 	historyUC := stockuc.NewHistoryUseCase(avClient)

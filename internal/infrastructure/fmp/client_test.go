@@ -144,6 +144,96 @@ func TestSearchSymbolParsing(t *testing.T) {
 	}
 }
 
+func TestSearchNameParsing(t *testing.T) {
+	fixture := []fmpSearchResult{
+		{Symbol: "GOOGL", Name: "Alphabet Inc.", Currency: "USD", ExchangeFullName: "NASDAQ Global Select", Exchange: "NASDAQ"},
+	}
+
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(fixture)
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+
+	matches, err := client.SearchName("google")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/search-name") {
+		t.Errorf("expected path ending in /search-name, got %s", gotPath)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Symbol != "GOOGL" {
+		t.Errorf("expected symbol GOOGL, got %s", matches[0].Symbol)
+	}
+	if matches[0].Name != "Alphabet Inc." {
+		t.Errorf("expected name Alphabet Inc., got %s", matches[0].Name)
+	}
+	if matches[0].Type != "NASDAQ" {
+		t.Errorf("expected type NASDAQ, got %s", matches[0].Type)
+	}
+	if matches[0].Region != "NASDAQ Global Select" {
+		t.Errorf("expected region NASDAQ Global Select, got %s", matches[0].Region)
+	}
+	if matches[0].Currency != "USD" {
+		t.Errorf("expected currency USD, got %s", matches[0].Currency)
+	}
+}
+
+func TestListStockSymbols(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"symbol":"AAPL","companyName":"Apple Inc."},{"symbol":"GOOGL","companyName":"Alphabet Inc."},{"symbol":""}]`))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	symbols, err := client.ListStockSymbols()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/stock-list") {
+		t.Errorf("expected path ending in /stock-list, got %s", gotPath)
+	}
+	// Blank symbols are skipped.
+	if len(symbols) != 2 {
+		t.Fatalf("expected 2 symbols, got %d: %v", len(symbols), symbols)
+	}
+	if symbols[0] != "AAPL" || symbols[1] != "GOOGL" {
+		t.Errorf("unexpected symbols: %v", symbols)
+	}
+}
+
+func TestListETFSymbols(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"symbol":"SPY","name":"SPDR S&P 500 ETF Trust"}]`))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	symbols, err := client.ListETFSymbols()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/etfs-list") {
+		t.Errorf("expected path ending in /etfs-list, got %s", gotPath)
+	}
+	if len(symbols) != 1 || symbols[0] != "SPY" {
+		t.Errorf("unexpected symbols: %v", symbols)
+	}
+}
+
 func TestDoGet_RetriesThenSucceeds(t *testing.T) {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
