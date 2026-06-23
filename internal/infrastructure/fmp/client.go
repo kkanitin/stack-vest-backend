@@ -80,12 +80,14 @@ type fmpSearchResult struct {
 	Exchange         string `json:"exchange"`
 }
 
-func (c *Client) SearchSymbol(keywords string) ([]stock.Match, error) {
+// doSearch queries an FMP search endpoint (e.g. /search-symbol, /search-name)
+// and maps the shared fmpSearchResult shape to []stock.Match.
+func (c *Client) doSearch(path, keywords string) ([]stock.Match, error) {
 	params := url.Values{}
 	params.Set("query", keywords)
 	params.Set("apikey", c.apiKey)
 
-	resp, err := c.doGet(c.baseURL + "/search-symbol?" + params.Encode())
+	resp, err := c.doGet(c.baseURL + path + "?" + params.Encode())
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +113,61 @@ func (c *Client) SearchSymbol(keywords string) ([]stock.Match, error) {
 	return matches, nil
 }
 
+// SearchSymbol resolves ticker-like queries via FMP's /search-symbol endpoint.
+func (c *Client) SearchSymbol(keywords string) ([]stock.Match, error) {
+	return c.doSearch("/search-symbol", keywords)
+}
+
+// SearchName resolves company/brand-name queries via FMP's /search-name endpoint
+// (e.g. "Apple" → AAPL, "Google" → Alphabet/GOOGL).
+func (c *Client) SearchName(keywords string) ([]stock.Match, error) {
+	return c.doSearch("/search-name", keywords)
+}
+
 var _ stock.Searcher = (*Client)(nil)
+
+type fmpSymbolListItem struct {
+	Symbol string `json:"symbol"`
+}
+
+// listSymbols fetches an FMP bulk symbol list (e.g. /stock-list, /etfs-list) and
+// returns just the symbols. Only the "symbol" field is decoded; other fields are
+// ignored.
+func (c *Client) listSymbols(path string) ([]string, error) {
+	params := url.Values{}
+	params.Set("apikey", c.apiKey)
+
+	resp, err := c.doGet(c.baseURL + path + "?" + params.Encode())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var raw []fmpSymbolListItem
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	}
+
+	symbols := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if r.Symbol != "" {
+			symbols = append(symbols, r.Symbol)
+		}
+	}
+	return symbols, nil
+}
+
+// ListStockSymbols returns every tradable stock symbol from FMP's /stock-list.
+func (c *Client) ListStockSymbols() ([]string, error) {
+	return c.listSymbols("/stock-list")
+}
+
+// ListETFSymbols returns every tradable ETF symbol from FMP's /etfs-list.
+func (c *Client) ListETFSymbols() ([]string, error) {
+	return c.listSymbols("/etfs-list")
+}
+
+var _ stock.SymbolLister = (*Client)(nil)
 
 type fmpPriceChange struct {
 	Symbol string  `json:"symbol"`

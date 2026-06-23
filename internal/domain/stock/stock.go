@@ -42,6 +42,14 @@ type Quote struct {
 
 type Searcher interface {
 	SearchSymbol(keywords string) ([]Match, error)
+	SearchName(keywords string) ([]Match, error)
+}
+
+// SymbolLister returns the full set of tradable stock and ETF symbols. It backs
+// the search use-case's stock/ETF membership filter.
+type SymbolLister interface {
+	ListStockSymbols() ([]string, error)
+	ListETFSymbols() ([]string, error)
 }
 
 type PriceChanger interface {
