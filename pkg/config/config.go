@@ -37,6 +37,9 @@ type Config struct {
 		FMP struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"fmp"`
+		Groq struct {
+			APIKey string `yaml:"api_key"`
+		} `yaml:"groq"`
 	} `yaml:"third_party_api"`
 	CORS struct {
 		AllowOrigins []string `yaml:"allow_origins"`
@@ -84,6 +87,9 @@ func Load() *Config {
 	}
 	if v := os.Getenv("THIRD_PARTY_API_FMP_API_KEY"); v != "" {
 		cfg.ThirdPartyAPI.FMP.APIKey = v
+	}
+	if v := os.Getenv("THIRD_PARTY_API_GROQ_API_KEY"); v != "" {
+		cfg.ThirdPartyAPI.Groq.APIKey = v
 	}
 	if v := os.Getenv("CORS_ALLOW_ORIGINS"); v != "" {
 		cfg.CORS.AllowOrigins = strings.Split(v, ",")

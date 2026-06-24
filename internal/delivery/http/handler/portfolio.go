@@ -1,26 +1,31 @@
 package handler
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
+	analysisdomain "github.com/kanitin/stackvest/backend/internal/domain/analysis"
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
+	analysisuc "github.com/kanitin/stackvest/backend/internal/usecase/analysis"
 	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
 )
 
 type PortfolioHandler struct {
-	uc *portfoliouc.UseCase
+	uc        *portfoliouc.UseCase
+	analyzeUC *analysisuc.UseCase
 }
 
-func NewPortfolioHandler(uc *portfoliouc.UseCase) *PortfolioHandler {
-	return &PortfolioHandler{uc: uc}
+func NewPortfolioHandler(uc *portfoliouc.UseCase, analyzeUC *analysisuc.UseCase) *PortfolioHandler {
+	return &PortfolioHandler{uc: uc, analyzeUC: analyzeUC}
 }
 
 func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -31,6 +36,7 @@ func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	pf.GET("/positions", h.listPositions)
 	pf.GET("/summary", h.getSummary)
 	pf.GET("/activity", h.getActivity)
+	pf.POST("/analyze", h.analyze)
 }
 
 type addPositionRequest struct {
@@ -168,4 +174,77 @@ func (h *PortfolioHandler) getActivity(c *gin.Context) {
 		return
 	}
 	response.OK(c, activities)
+}
+
+type analyzeRequest struct {
+	Portfolio struct {
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description"`
+		Holdings    []struct {
+			Ticker string  `json:"ticker" binding:"required"`
+			Actual float64 `json:"actual" binding:"gte=0"`
+			Target float64 `json:"target" binding:"gte=0"`
+		} `json:"holdings" binding:"required,min=1,dive"`
+	} `json:"portfolio"`
+	Dimensions []string `json:"dimensions" binding:"required,min=1,dive,required"`
+}
+
+// analyze streams an AI-generated portfolio review as Server-Sent Events. It is an
+// explicit exception to the standard response envelope (see AGENTS.md): only the
+// pre-stream error paths (400/429/502) use response.Err; the success path writes
+// text/event-stream and terminates with a single `data: [DONE]`.
+func (h *PortfolioHandler) analyze(c *gin.Context) {
+	var req analyzeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Err(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	holdings := make([]analysisuc.Holding, len(req.Portfolio.Holdings))
+	for i, h := range req.Portfolio.Holdings {
+		holdings[i] = analysisuc.Holding{Ticker: h.Ticker, Actual: h.Actual, Target: h.Target}
+	}
+
+	body, err := h.analyzeUC.Stream(c.Request.Context(), analysisuc.Input{
+		Name:        req.Portfolio.Name,
+		Description: req.Portfolio.Description,
+		Holdings:    holdings,
+		Dimensions:  req.Dimensions,
+	})
+	if errors.Is(err, analysisdomain.ErrRateLimited) {
+		slog.WarnContext(c.Request.Context(), "analysis rate limited")
+		response.Err(c, http.StatusTooManyRequests, "analysis service is rate limited, try again shortly")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to generate analysis", "error", err)
+		response.Err(c, http.StatusBadGateway, "failed to generate analysis")
+		return
+	}
+	defer body.Close()
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Status(http.StatusOK)
+
+	// Forward each upstream SSE line as it arrives, flushing so nothing buffers.
+	// Drop the upstream's own `data: [DONE]` terminal; we emit exactly one below.
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// [DONE] is always the terminal frame; stop here and emit our own below.
+		if strings.TrimSpace(line) == "data: [DONE]" {
+			break
+		}
+		fmt.Fprintf(c.Writer, "%s\n", line)
+		c.Writer.Flush()
+	}
+	if err := scanner.Err(); err != nil {
+		slog.ErrorContext(c.Request.Context(), "analysis stream truncated", "error", err)
+	}
+
+	fmt.Fprint(c.Writer, "data: [DONE]\n\n")
+	c.Writer.Flush()
 }

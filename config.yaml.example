@@ -22,6 +22,8 @@ auth:
 third_party_api:
   fmp:
     api_key: "YOUR_FMP_API_KEY"
+  groq:
+    api_key: "YOUR_GROQ_API_KEY"
 
 cors:
   allow_origins:
