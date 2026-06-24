@@ -13,10 +13,12 @@ import (
 )
 
 type UseCase struct {
-	repo         portfoliodomain.Repository
-	userRepo     userdomain.Repository
-	quoter       stockdomain.Quoter
-	priceChanger stockdomain.PriceChanger
+	repo          portfoliodomain.Repository
+	userRepo      userdomain.Repository
+	quoter        stockdomain.Quoter
+	priceChanger  stockdomain.PriceChanger
+	maxPortfolios int
+	maxPositions  int
 }
 
 func New(
@@ -24,40 +26,115 @@ func New(
 	userRepo userdomain.Repository,
 	quoter stockdomain.Quoter,
 	priceChanger stockdomain.PriceChanger,
+	maxPortfolios int,
+	maxPositions int,
 ) *UseCase {
-	return &UseCase{repo: repo, userRepo: userRepo, quoter: quoter, priceChanger: priceChanger}
+	return &UseCase{
+		repo:          repo,
+		userRepo:      userRepo,
+		quoter:        quoter,
+		priceChanger:  priceChanger,
+		maxPortfolios: maxPortfolios,
+		maxPositions:  maxPositions,
+	}
 }
 
-func (uc *UseCase) AddPosition(ctx context.Context, email, symbol, name string, shares, avgCost float64) (*portfoliodomain.Position, error) {
+// ownedPortfolio verifies that the portfolio identified by portfolioID belongs to
+// the authenticated user. A portfolio that does not exist or is owned by someone
+// else both surface as ErrPortfolioNotFound (404) so existence is not leaked.
+func (uc *UseCase) ownedPortfolio(ctx context.Context, email, portfolioID string) (*portfoliodomain.Portfolio, error) {
 	user, err := uc.userRepo.FindByEmail(ctx, email)
 	if err != nil {
 		return nil, fmt.Errorf("user lookup: %w", err)
 	}
-	return uc.repo.Add(ctx, user.ID, symbol, name, shares, avgCost)
-}
-
-func (uc *UseCase) RemovePosition(ctx context.Context, email, symbol string) error {
-	user, err := uc.userRepo.FindByEmail(ctx, email)
+	p, err := uc.repo.GetPortfolio(ctx, portfolioID)
 	if err != nil {
-		return fmt.Errorf("user lookup: %w", err)
+		return nil, err
 	}
-	return uc.repo.Remove(ctx, user.ID, symbol)
+	if p.UserID != user.ID {
+		return nil, portfoliodomain.ErrPortfolioNotFound
+	}
+	return p, nil
 }
 
-func (uc *UseCase) UpdatePosition(ctx context.Context, email, symbol string, shares, avgCost *float64) (*portfoliodomain.Position, error) {
-	user, err := uc.userRepo.FindByEmail(ctx, email)
-	if err != nil {
-		return nil, fmt.Errorf("user lookup: %w", err)
-	}
-	return uc.repo.Update(ctx, user.ID, symbol, shares, avgCost)
-}
+// --- Portfolios ---
 
-func (uc *UseCase) ListPositions(ctx context.Context, email string) ([]*portfoliodomain.Position, error) {
+func (uc *UseCase) CreatePortfolio(ctx context.Context, email, name, description string) (*portfoliodomain.Portfolio, error) {
 	user, err := uc.userRepo.FindByEmail(ctx, email)
 	if err != nil {
 		return nil, fmt.Errorf("user lookup: %w", err)
 	}
-	positions, err := uc.repo.ListByUserID(ctx, user.ID)
+	count, err := uc.repo.CountPortfolios(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	if count >= uc.maxPortfolios {
+		return nil, portfoliodomain.ErrPortfolioLimitReached
+	}
+	return uc.repo.CreatePortfolio(ctx, user.ID, name, description)
+}
+
+func (uc *UseCase) ListPortfolios(ctx context.Context, email string) ([]*portfoliodomain.Portfolio, error) {
+	user, err := uc.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("user lookup: %w", err)
+	}
+	return uc.repo.ListPortfolios(ctx, user.ID)
+}
+
+func (uc *UseCase) GetPortfolio(ctx context.Context, email, portfolioID string) (*portfoliodomain.Portfolio, error) {
+	return uc.ownedPortfolio(ctx, email, portfolioID)
+}
+
+func (uc *UseCase) UpdatePortfolio(ctx context.Context, email, portfolioID string, name, description *string) (*portfoliodomain.Portfolio, error) {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return nil, err
+	}
+	return uc.repo.UpdatePortfolio(ctx, portfolioID, name, description)
+}
+
+func (uc *UseCase) DeletePortfolio(ctx context.Context, email, portfolioID string) error {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return err
+	}
+	return uc.repo.DeletePortfolio(ctx, portfolioID)
+}
+
+// --- Positions ---
+
+func (uc *UseCase) AddPosition(ctx context.Context, email, portfolioID, symbol, name string, shares, avgCost float64) (*portfoliodomain.Position, error) {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return nil, err
+	}
+	count, err := uc.repo.CountPositions(ctx, portfolioID)
+	if err != nil {
+		return nil, err
+	}
+	if count >= uc.maxPositions {
+		return nil, portfoliodomain.ErrPositionLimitReached
+	}
+	return uc.repo.Add(ctx, portfolioID, symbol, name, shares, avgCost)
+}
+
+func (uc *UseCase) RemovePosition(ctx context.Context, email, portfolioID, symbol string) error {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return err
+	}
+	return uc.repo.Remove(ctx, portfolioID, symbol)
+}
+
+func (uc *UseCase) UpdatePosition(ctx context.Context, email, portfolioID, symbol string, shares, avgCost *float64) (*portfoliodomain.Position, error) {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return nil, err
+	}
+	return uc.repo.Update(ctx, portfolioID, symbol, shares, avgCost)
+}
+
+func (uc *UseCase) ListPositions(ctx context.Context, email, portfolioID string) ([]*portfoliodomain.Position, error) {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return nil, err
+	}
+	positions, err := uc.repo.ListByPortfolioID(ctx, portfolioID)
 	if err != nil {
 		return nil, err
 	}
@@ -65,12 +142,11 @@ func (uc *UseCase) ListPositions(ctx context.Context, email string) ([]*portfoli
 	return positions, nil
 }
 
-func (uc *UseCase) GetSummary(ctx context.Context, email string) (*portfoliodomain.Summary, error) {
-	user, err := uc.userRepo.FindByEmail(ctx, email)
-	if err != nil {
-		return nil, fmt.Errorf("user lookup: %w", err)
+func (uc *UseCase) GetSummary(ctx context.Context, email, portfolioID string) (*portfoliodomain.Summary, error) {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return nil, err
 	}
-	positions, err := uc.repo.ListByUserID(ctx, user.ID)
+	positions, err := uc.repo.ListByPortfolioID(ctx, portfolioID)
 	if err != nil {
 		return nil, err
 	}
@@ -131,12 +207,11 @@ func (uc *UseCase) GetSummary(ctx context.Context, email string) (*portfoliodoma
 	}, nil
 }
 
-func (uc *UseCase) GetActivity(ctx context.Context, email string, limit int) ([]*portfoliodomain.Activity, error) {
-	user, err := uc.userRepo.FindByEmail(ctx, email)
-	if err != nil {
-		return nil, fmt.Errorf("user lookup: %w", err)
+func (uc *UseCase) GetActivity(ctx context.Context, email, portfolioID string, limit int) ([]*portfoliodomain.Activity, error) {
+	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
+		return nil, err
 	}
-	return uc.repo.GetActivity(ctx, user.ID, limit)
+	return uc.repo.GetActivity(ctx, portfolioID, limit)
 }
 
 func (uc *UseCase) enrichPositions(ctx context.Context, positions []*portfoliodomain.Position) {

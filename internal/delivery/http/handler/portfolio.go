@@ -29,15 +29,133 @@ func NewPortfolioHandler(uc *portfoliouc.UseCase, analyzeUC *analysisuc.UseCase)
 }
 
 func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
-	pf := rg.Group("/portfolio")
-	pf.POST("/positions", h.addPosition)
-	pf.DELETE("/positions/:symbol", h.removePosition)
-	pf.PATCH("/positions/:symbol", h.updatePosition)
-	pf.GET("/positions", h.listPositions)
-	pf.GET("/summary", h.getSummary)
-	pf.GET("/activity", h.getActivity)
+	pf := rg.Group("/portfolios")
+	pf.POST("", h.createPortfolio)
+	pf.GET("", h.listPortfolios)
 	pf.POST("/analyze", h.analyze)
+	pf.GET("/:id", h.getPortfolio)
+	pf.PATCH("/:id", h.updatePortfolio)
+	pf.DELETE("/:id", h.deletePortfolio)
+	pf.POST("/:id/positions", h.addPosition)
+	pf.GET("/:id/positions", h.listPositions)
+	pf.PATCH("/:id/positions/:symbol", h.updatePosition)
+	pf.DELETE("/:id/positions/:symbol", h.removePosition)
+	pf.GET("/:id/summary", h.getSummary)
+	pf.GET("/:id/activity", h.getActivity)
 }
+
+// --- Portfolios ---
+
+type createPortfolioRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func (h *PortfolioHandler) createPortfolio(c *gin.Context) {
+	var req createPortfolioRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Err(c, http.StatusBadRequest, "name is required")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		response.Err(c, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	email := c.GetString(middleware.EmailKey)
+	p, err := h.uc.CreatePortfolio(c.Request.Context(), email, req.Name, req.Description)
+	if errors.Is(err, portfoliodomain.ErrPortfolioLimitReached) {
+		response.Err(c, http.StatusConflict, "portfolio limit reached")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to create portfolio", "email", email, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to create portfolio")
+		return
+	}
+	response.Created(c, p)
+}
+
+func (h *PortfolioHandler) listPortfolios(c *gin.Context) {
+	email := c.GetString(middleware.EmailKey)
+	portfolios, err := h.uc.ListPortfolios(c.Request.Context(), email)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to list portfolios", "email", email, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to list portfolios")
+		return
+	}
+	response.OK(c, portfolios)
+}
+
+func (h *PortfolioHandler) getPortfolio(c *gin.Context) {
+	id := c.Param("id")
+	email := c.GetString(middleware.EmailKey)
+	p, err := h.uc.GetPortfolio(c.Request.Context(), email, id)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to get portfolio", "email", email, "id", id, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to get portfolio")
+		return
+	}
+	response.OK(c, p)
+}
+
+type updatePortfolioRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+}
+
+func (h *PortfolioHandler) updatePortfolio(c *gin.Context) {
+	id := c.Param("id")
+
+	var req updatePortfolioRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Err(c, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == nil && req.Description == nil {
+		response.Err(c, http.StatusBadRequest, "at least one of name or description is required")
+		return
+	}
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
+		response.Err(c, http.StatusBadRequest, "name must not be empty")
+		return
+	}
+
+	email := c.GetString(middleware.EmailKey)
+	p, err := h.uc.UpdatePortfolio(c.Request.Context(), email, id, req.Name, req.Description)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to update portfolio", "email", email, "id", id, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to update portfolio")
+		return
+	}
+	response.OK(c, p)
+}
+
+func (h *PortfolioHandler) deletePortfolio(c *gin.Context) {
+	id := c.Param("id")
+	email := c.GetString(middleware.EmailKey)
+	err := h.uc.DeletePortfolio(c.Request.Context(), email, id)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to delete portfolio", "email", email, "id", id, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to delete portfolio")
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// --- Positions ---
 
 type addPositionRequest struct {
 	Symbol  string   `json:"symbol"`
@@ -47,6 +165,8 @@ type addPositionRequest struct {
 }
 
 func (h *PortfolioHandler) addPosition(c *gin.Context) {
+	id := c.Param("id")
+
 	var req addPositionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Err(c, http.StatusBadRequest, "symbol, name, shares and avgCost are required")
@@ -66,13 +186,21 @@ func (h *PortfolioHandler) addPosition(c *gin.Context) {
 	}
 
 	email := c.GetString(middleware.EmailKey)
-	pos, err := h.uc.AddPosition(c.Request.Context(), email, req.Symbol, req.Name, *req.Shares, *req.AvgCost)
+	pos, err := h.uc.AddPosition(c.Request.Context(), email, id, req.Symbol, req.Name, *req.Shares, *req.AvgCost)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
+	if errors.Is(err, portfoliodomain.ErrPositionLimitReached) {
+		response.Err(c, http.StatusConflict, "position limit reached")
+		return
+	}
 	if errors.Is(err, portfoliodomain.ErrAlreadyExists) {
 		response.Err(c, http.StatusConflict, fmt.Sprintf("position already exists: %s", req.Symbol))
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to add position", "email", email, "symbol", req.Symbol, "error", err)
+		slog.ErrorContext(c.Request.Context(), "failed to add position", "email", email, "id", id, "symbol", req.Symbol, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to add position")
 		return
 	}
@@ -85,6 +213,7 @@ type updatePositionRequest struct {
 }
 
 func (h *PortfolioHandler) updatePosition(c *gin.Context) {
+	id := c.Param("id")
 	symbol := c.Param("symbol")
 
 	var req updatePositionRequest
@@ -106,13 +235,17 @@ func (h *PortfolioHandler) updatePosition(c *gin.Context) {
 	}
 
 	email := c.GetString(middleware.EmailKey)
-	pos, err := h.uc.UpdatePosition(c.Request.Context(), email, symbol, req.Shares, req.AvgCost)
+	pos, err := h.uc.UpdatePosition(c.Request.Context(), email, id, symbol, req.Shares, req.AvgCost)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
 	if errors.Is(err, portfoliodomain.ErrNotFound) {
 		response.Err(c, http.StatusNotFound, fmt.Sprintf("position not found: %s", symbol))
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to update position", "email", email, "symbol", symbol, "error", err)
+		slog.ErrorContext(c.Request.Context(), "failed to update position", "email", email, "id", id, "symbol", symbol, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to update position")
 		return
 	}
@@ -120,16 +253,21 @@ func (h *PortfolioHandler) updatePosition(c *gin.Context) {
 }
 
 func (h *PortfolioHandler) removePosition(c *gin.Context) {
+	id := c.Param("id")
 	symbol := c.Param("symbol")
 	email := c.GetString(middleware.EmailKey)
 
-	err := h.uc.RemovePosition(c.Request.Context(), email, symbol)
+	err := h.uc.RemovePosition(c.Request.Context(), email, id, symbol)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
 	if errors.Is(err, portfoliodomain.ErrNotFound) {
 		response.Err(c, http.StatusNotFound, fmt.Sprintf("position not found: %s", symbol))
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to remove position", "email", email, "symbol", symbol, "error", err)
+		slog.ErrorContext(c.Request.Context(), "failed to remove position", "email", email, "id", id, "symbol", symbol, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to remove position")
 		return
 	}
@@ -137,10 +275,15 @@ func (h *PortfolioHandler) removePosition(c *gin.Context) {
 }
 
 func (h *PortfolioHandler) listPositions(c *gin.Context) {
+	id := c.Param("id")
 	email := c.GetString(middleware.EmailKey)
-	positions, err := h.uc.ListPositions(c.Request.Context(), email)
+	positions, err := h.uc.ListPositions(c.Request.Context(), email, id)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to list positions", "email", email, "error", err)
+		slog.ErrorContext(c.Request.Context(), "failed to list positions", "email", email, "id", id, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to list positions")
 		return
 	}
@@ -148,10 +291,15 @@ func (h *PortfolioHandler) listPositions(c *gin.Context) {
 }
 
 func (h *PortfolioHandler) getSummary(c *gin.Context) {
+	id := c.Param("id")
 	email := c.GetString(middleware.EmailKey)
-	summary, err := h.uc.GetSummary(c.Request.Context(), email)
+	summary, err := h.uc.GetSummary(c.Request.Context(), email, id)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to load portfolio", "email", email, "error", err)
+		slog.ErrorContext(c.Request.Context(), "failed to load portfolio", "email", email, "id", id, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to load portfolio")
 		return
 	}
@@ -159,6 +307,8 @@ func (h *PortfolioHandler) getSummary(c *gin.Context) {
 }
 
 func (h *PortfolioHandler) getActivity(c *gin.Context) {
+	id := c.Param("id")
+
 	limitStr := c.DefaultQuery("limit", "10")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit < 1 || limit > 50 {
@@ -167,14 +317,20 @@ func (h *PortfolioHandler) getActivity(c *gin.Context) {
 	}
 
 	email := c.GetString(middleware.EmailKey)
-	activities, err := h.uc.GetActivity(c.Request.Context(), email, limit)
+	activities, err := h.uc.GetActivity(c.Request.Context(), email, id, limit)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to fetch activity", "email", email, "error", err)
+		slog.ErrorContext(c.Request.Context(), "failed to fetch activity", "email", email, "id", id, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to fetch activity")
 		return
 	}
 	response.OK(c, activities)
 }
+
+// --- AI analysis (stateless) ---
 
 type analyzeRequest struct {
 	Portfolio struct {

@@ -88,7 +88,7 @@ func main() {
 	analyzeUC := analysisuc.New(groqClient)
 
 	portfolioRepo := portfoliorepo.NewPostgresRepository(pool)
-	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, avClient, avClient)
+	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, avClient, avClient, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioUC, analyzeUC)
 
 	popularHandler := handler.NewPopularHandler(avClient)

@@ -65,7 +65,7 @@ func TestAnalyze(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newAnalyzeRouter(tc.streamer)
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/portfolio/analyze", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, "/portfolios/analyze", strings.NewReader(tc.body))
 			r.ServeHTTP(w, req)
 
 			if w.Code != tc.wantCode {

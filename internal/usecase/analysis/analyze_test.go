@@ -59,7 +59,8 @@ func TestBuildUserPrompt_Description(t *testing.T) {
 
 func TestSystemPrompt(t *testing.T) {
 	for _, want := range []string{
-		"You are a portfolio analyst reviewing an ETF investment portfolio",
+		"You are a portfolio analyst.",
+		"You ONLY analyze ETF investment portfolios",
 		"No bullet points. No headers.",
 		"Keep it under 250 words.",
 	} {
