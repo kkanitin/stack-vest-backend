@@ -32,18 +32,23 @@ func (m *mockUserRepo) Create(_ context.Context, _ *userdomain.User) (*userdomai
 }
 
 type mockRepo struct {
-	getPortfolio    func(id string) (*portfoliodomain.Portfolio, error)
-	countPortfolios func(userID string) (int, error)
-	countPositions  func(portfolioID string) (int, error)
-	createCalled    bool
-	addCalled       bool
+	getPortfolio        func(id string) (*portfoliodomain.Portfolio, error)
+	countPortfolios     func(userID string) (int, error)
+	countPositions      func(portfolioID string) (int, error)
+	listPortfolios      func(userID string) ([]*portfoliodomain.Portfolio, error)
+	listPositionsByUser func(userID string) ([]*portfoliodomain.Position, error)
+	createCalled        bool
+	addCalled           bool
 }
 
 func (m *mockRepo) CreatePortfolio(_ context.Context, userID, name, description string) (*portfoliodomain.Portfolio, error) {
 	m.createCalled = true
 	return &portfoliodomain.Portfolio{ID: "new-pf", UserID: userID, Name: name, Description: description}, nil
 }
-func (m *mockRepo) ListPortfolios(_ context.Context, _ string) ([]*portfoliodomain.Portfolio, error) {
+func (m *mockRepo) ListPortfolios(_ context.Context, userID string) ([]*portfoliodomain.Portfolio, error) {
+	if m.listPortfolios != nil {
+		return m.listPortfolios(userID)
+	}
 	return nil, nil
 }
 func (m *mockRepo) GetPortfolio(_ context.Context, id string) (*portfoliodomain.Portfolio, error) {
@@ -73,6 +78,12 @@ func (m *mockRepo) Update(_ context.Context, _, _ string, _, _ *float64) (*portf
 func (m *mockRepo) ListByPortfolioID(_ context.Context, _ string) ([]*portfoliodomain.Position, error) {
 	return nil, nil
 }
+func (m *mockRepo) ListPositionsByUser(_ context.Context, userID string) ([]*portfoliodomain.Position, error) {
+	if m.listPositionsByUser != nil {
+		return m.listPositionsByUser(userID)
+	}
+	return nil, nil
+}
 func (m *mockRepo) CountPositions(_ context.Context, portfolioID string) (int, error) {
 	if m.countPositions != nil {
 		return m.countPositions(portfolioID)
@@ -84,6 +95,20 @@ func (m *mockRepo) GetActivity(_ context.Context, _ string, _ int) ([]*portfolio
 }
 
 var _ portfoliodomain.Repository = (*mockRepo)(nil)
+
+// stubQuoter / stubPriceChanger return fixed market data keyed by symbol so value
+// and diversification math can be asserted deterministically.
+type stubQuoter struct{ price map[string]float64 }
+
+func (s stubQuoter) GetQuote(symbol string) (*stockdomain.Quote, error) {
+	return &stockdomain.Quote{Symbol: symbol, Price: s.price[symbol]}, nil
+}
+
+type stubPriceChanger struct{ m1 map[string]float64 }
+
+func (s stubPriceChanger) GetPriceChange(symbol string) (*stockdomain.PriceChange, error) {
+	return &stockdomain.PriceChange{M1: s.m1[symbol]}, nil
+}
 
 // quoter/priceChanger are unused by the paths under test; nil is fine since those
 // methods are never reached.
@@ -181,5 +206,133 @@ func TestGetPortfolio_NotOwnedReturns404Error(t *testing.T) {
 	_, err := uc.GetPortfolio(context.Background(), "a@b.com", "pf1")
 	if !errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
 		t.Fatalf("expected ErrPortfolioNotFound, got %v", err)
+	}
+}
+
+func newUCWithPrices(repo portfoliodomain.Repository, userRepo userdomain.Repository, q stockdomain.Quoter, pc stockdomain.PriceChanger) *portfoliouc.UseCase {
+	return portfoliouc.New(repo, userRepo, q, pc, 10, 20)
+}
+
+// failingPriceChanger simulates an upstream outage so a held symbol has no usable price.
+type failingPriceChanger struct{}
+
+func (failingPriceChanger) GetPriceChange(string) (*stockdomain.PriceChange, error) {
+	return nil, errors.New("upstream down")
+}
+
+func TestListPortfolios_PricingOutageLeavesValueNil(t *testing.T) {
+	repo := &mockRepo{
+		listPortfolios: func(string) ([]*portfoliodomain.Portfolio, error) {
+			return []*portfoliodomain.Portfolio{{ID: "pf1", UserID: "u1"}}, nil
+		},
+		listPositionsByUser: func(string) ([]*portfoliodomain.Position, error) {
+			return []*portfoliodomain.Position{{PortfolioID: "pf1", Symbol: "AAPL", Shares: 3}}, nil
+		},
+	}
+	q := stubQuoter{price: map[string]float64{"AAPL": 100}}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, failingPriceChanger{})
+
+	ps, err := uc.ListPortfolios(context.Background(), "a@b.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Holdings exist but couldn't be priced: value is nil (→ "—"), count still known.
+	if ps[0].Value != nil {
+		t.Fatalf("expected nil value on pricing outage, got %v", *ps[0].Value)
+	}
+	if ps[0].AssetCount == nil || *ps[0].AssetCount != 1 {
+		t.Fatalf("expected assetCount 1 despite outage, got %v", ps[0].AssetCount)
+	}
+}
+
+func TestGetPortfoliosSummary_Empty(t *testing.T) {
+	repo := &mockRepo{listPositionsByUser: func(string) ([]*portfoliodomain.Position, error) {
+		return []*portfoliodomain.Position{}, nil
+	}}
+	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
+
+	s, err := uc.GetPortfoliosSummary(context.Background(), "a@b.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.TotalValue != 0 || s.ChangePct != 0 || s.DiversificationScore != 0 {
+		t.Fatalf("expected zero summary, got %+v", s)
+	}
+}
+
+func TestGetPortfoliosSummary_AggregatesAndScores(t *testing.T) {
+	// AAPL and MSFT each worth 1000 (10 × $100); both up 25% over the month.
+	repo := &mockRepo{listPositionsByUser: func(string) ([]*portfoliodomain.Position, error) {
+		return []*portfoliodomain.Position{
+			{PortfolioID: "pf1", Symbol: "AAPL", Shares: 10},
+			{PortfolioID: "pf2", Symbol: "MSFT", Shares: 10},
+		}, nil
+	}}
+	q := stubQuoter{price: map[string]float64{"AAPL": 100, "MSFT": 100}}
+	pc := stubPriceChanger{m1: map[string]float64{"AAPL": 25, "MSFT": 25}}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, pc)
+
+	s, err := uc.GetPortfoliosSummary(context.Background(), "a@b.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.TotalValue != 2000 {
+		t.Fatalf("expected totalValue 2000, got %v", s.TotalValue)
+	}
+	if s.ChangePct < 24.99 || s.ChangePct > 25.01 {
+		t.Fatalf("expected changePct ~25, got %v", s.ChangePct)
+	}
+	// Two equally-weighted symbols: HHI = 0.5, score = (1-0.5)*100 = 50.
+	if s.DiversificationScore != 50 {
+		t.Fatalf("expected diversificationScore 50, got %d", s.DiversificationScore)
+	}
+}
+
+func TestGetPortfoliosSummary_SingleHoldingScoresZero(t *testing.T) {
+	repo := &mockRepo{listPositionsByUser: func(string) ([]*portfoliodomain.Position, error) {
+		return []*portfoliodomain.Position{{PortfolioID: "pf1", Symbol: "AAPL", Shares: 5}}, nil
+	}}
+	q := stubQuoter{price: map[string]float64{"AAPL": 200}}
+	pc := stubPriceChanger{m1: map[string]float64{"AAPL": 0}}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, pc)
+
+	s, err := uc.GetPortfoliosSummary(context.Background(), "a@b.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.DiversificationScore != 0 {
+		t.Fatalf("expected diversificationScore 0 for a single holding, got %d", s.DiversificationScore)
+	}
+}
+
+func TestListPortfolios_EnrichesValueAndAssetCount(t *testing.T) {
+	repo := &mockRepo{
+		listPositionsByUser: func(string) ([]*portfoliodomain.Position, error) {
+			return []*portfoliodomain.Position{
+				{PortfolioID: "pf1", Symbol: "AAPL", Shares: 2},
+				{PortfolioID: "pf1", Symbol: "MSFT", Shares: 1},
+			}, nil
+		},
+	}
+	repo.listPortfolios = func(string) ([]*portfoliodomain.Portfolio, error) {
+		return []*portfoliodomain.Portfolio{{ID: "pf1", UserID: "u1"}, {ID: "pf2", UserID: "u1"}}, nil
+	}
+	q := stubQuoter{price: map[string]float64{"AAPL": 100, "MSFT": 50}}
+	pc := stubPriceChanger{m1: map[string]float64{"AAPL": 0, "MSFT": 0}}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, pc)
+
+	ps, err := uc.ListPortfolios(context.Background(), "a@b.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ps) != 2 {
+		t.Fatalf("expected 2 portfolios, got %d", len(ps))
+	}
+	// pf1: 2×100 + 1×50 = 250, 2 assets. pf2: empty.
+	if ps[0].Value == nil || *ps[0].Value != 250 || ps[0].AssetCount == nil || *ps[0].AssetCount != 2 {
+		t.Fatalf("pf1: expected value 250 / assetCount 2, got %v / %v", ps[0].Value, ps[0].AssetCount)
+	}
+	if ps[1].Value == nil || *ps[1].Value != 0 || ps[1].AssetCount == nil || *ps[1].AssetCount != 0 {
+		t.Fatalf("pf2: expected empty (value 0 / assetCount 0), got %v / %v", ps[1].Value, ps[1].AssetCount)
 	}
 }

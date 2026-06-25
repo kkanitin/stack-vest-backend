@@ -32,6 +32,7 @@ func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	pf := rg.Group("/portfolios")
 	pf.POST("", h.createPortfolio)
 	pf.GET("", h.listPortfolios)
+	pf.GET("/summary", h.getPortfoliosSummary)
 	pf.POST("/analyze", h.analyze)
 	pf.GET("/:id", h.getPortfolio)
 	pf.PATCH("/:id", h.updatePortfolio)
@@ -85,6 +86,17 @@ func (h *PortfolioHandler) listPortfolios(c *gin.Context) {
 		return
 	}
 	response.OK(c, portfolios)
+}
+
+func (h *PortfolioHandler) getPortfoliosSummary(c *gin.Context) {
+	email := c.GetString(middleware.EmailKey)
+	summary, err := h.uc.GetPortfoliosSummary(c.Request.Context(), email)
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to load portfolios summary", "email", email, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to load portfolios summary")
+		return
+	}
+	response.OK(c, summary)
 }
 
 func (h *PortfolioHandler) getPortfolio(c *gin.Context) {

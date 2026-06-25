@@ -54,6 +54,9 @@ func (m *mockPortfolioRepo) Update(_ context.Context, _, _ string, _, _ *float64
 func (m *mockPortfolioRepo) ListByPortfolioID(_ context.Context, _ string) ([]*portfoliodomain.Position, error) {
 	return []*portfoliodomain.Position{}, nil
 }
+func (m *mockPortfolioRepo) ListPositionsByUser(_ context.Context, _ string) ([]*portfoliodomain.Position, error) {
+	return []*portfoliodomain.Position{}, nil
+}
 func (m *mockPortfolioRepo) CountPositions(_ context.Context, portfolioID string) (int, error) {
 	if m.countPositions != nil {
 		return m.countPositions(portfolioID)
@@ -117,6 +120,15 @@ func TestGetPortfolioHandler_ForeignReturns404(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/portfolios/foreign-id", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for another user's portfolio, got %d", w.Code)
+	}
+}
+
+func TestGetPortfoliosSummaryHandler(t *testing.T) {
+	r := newPortfolioRouter(&mockPortfolioRepo{})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/portfolios/summary", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for summary, got %d (body=%s)", w.Code, w.Body.String())
 	}
 }
 

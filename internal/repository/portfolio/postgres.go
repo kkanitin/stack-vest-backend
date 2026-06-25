@@ -270,6 +270,37 @@ func (r *PostgresRepository) ListByPortfolioID(ctx context.Context, portfolioID 
 	return positions, nil
 }
 
+func (r *PostgresRepository) ListPositionsByUser(ctx context.Context, userID string) ([]*portfoliodomain.Position, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT pp.id, pp.portfolio_id, pp.symbol, pp.name, pp.shares, pp.avg_cost, pp.added_at
+		 FROM stackvest.portfolio_positions pp
+		 JOIN stackvest.portfolios p ON p.id = pp.portfolio_id
+		 WHERE p.user_id = $1
+		 ORDER BY pp.added_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var positions []*portfoliodomain.Position
+	for rows.Next() {
+		var pos portfoliodomain.Position
+		if err := rows.Scan(&pos.ID, &pos.PortfolioID, &pos.Symbol, &pos.Name, &pos.Shares, &pos.AvgCost, &pos.AddedAt); err != nil {
+			return nil, err
+		}
+		positions = append(positions, &pos)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if positions == nil {
+		positions = []*portfoliodomain.Position{}
+	}
+	return positions, nil
+}
+
 func (r *PostgresRepository) CountPositions(ctx context.Context, portfolioID string) (int, error) {
 	var count int
 	err := r.pool.QueryRow(ctx,

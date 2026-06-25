@@ -22,6 +22,13 @@ type Portfolio struct {
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+	// Value and AssetCount are derived (not persisted): the current USD value of the
+	// portfolio's holdings and the number of holdings. They are populated only on the
+	// List/Get responses; Create/Update leave them nil (→ JSON null) since those paths
+	// don't load holdings. Value is also nil when holdings exist but none could be
+	// priced (upstream quote outage), so clients can render "—" rather than a false $0.
+	Value      *float64 `json:"value"`
+	AssetCount *int     `json:"assetCount"`
 }
 
 type Position struct {
@@ -52,6 +59,16 @@ type Summary struct {
 	ChangePct30d float64 `json:"changePct30d"`
 }
 
+// PortfoliosSummary aggregates figures across all of a user's portfolios for the
+// dashboard header.
+type PortfoliosSummary struct {
+	TotalValue float64 `json:"totalValue"`
+	ChangePct  float64 `json:"changePct"`
+	// DiversificationScore is 0–100, derived from holding-value concentration
+	// (HHI): a single holding scores 0, evenly spread holdings approach 100.
+	DiversificationScore int `json:"diversificationScore"`
+}
+
 type Repository interface {
 	// Portfolios
 	CreatePortfolio(ctx context.Context, userID, name, description string) (*Portfolio, error)
@@ -66,6 +83,9 @@ type Repository interface {
 	Remove(ctx context.Context, portfolioID, symbol string) error
 	Update(ctx context.Context, portfolioID, symbol string, shares, avgCost *float64) (*Position, error)
 	ListByPortfolioID(ctx context.Context, portfolioID string) ([]*Position, error)
+	// ListPositionsByUser returns every position across all of the user's portfolios,
+	// with PortfolioID set so callers can group by portfolio.
+	ListPositionsByUser(ctx context.Context, userID string) ([]*Position, error)
 	CountPositions(ctx context.Context, portfolioID string) (int, error)
 	GetActivity(ctx context.Context, portfolioID string, limit int) ([]*Activity, error)
 }
