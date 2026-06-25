@@ -13,9 +13,11 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/router"
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
+	groq "github.com/kanitin/stackvest/backend/internal/infrastructure/groq"
 	portfoliorepo "github.com/kanitin/stackvest/backend/internal/repository/portfolio"
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
 	watchlistrepo "github.com/kanitin/stackvest/backend/internal/repository/watchlist"
+	analysisuc "github.com/kanitin/stackvest/backend/internal/usecase/analysis"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 	dcauc "github.com/kanitin/stackvest/backend/internal/usecase/dca"
 	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
@@ -82,9 +84,12 @@ func main() {
 	dcaSimulatorUC := dcauc.NewSimulatorUseCase(avClient)
 	dcaHandler := handler.NewDCAHandler(dcaSimulatorUC)
 
+	groqClient := groq.NewClient(cfg.ThirdPartyAPI.Groq.APIKey)
+	analyzeUC := analysisuc.New(groqClient)
+
 	portfolioRepo := portfoliorepo.NewPostgresRepository(pool)
-	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, avClient, avClient)
-	portfolioHandler := handler.NewPortfolioHandler(portfolioUC)
+	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, avClient, avClient, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio)
+	portfolioHandler := handler.NewPortfolioHandler(portfolioUC, analyzeUC)
 
 	popularHandler := handler.NewPopularHandler(avClient)
 

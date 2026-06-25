@@ -91,6 +91,19 @@ pkg/
 
 The `/health` endpoint is an explicit exception and keeps its own `{"message": "ready"}` shape.
 
+`POST /api/v1/portfolio/analyze` is a second explicit exception: it streams the AI portfolio
+analysis as Server-Sent Events (`Content-Type: text/event-stream`), forwarding each upstream
+chunk and terminating with a single `data: [DONE]`. Only its pre-stream error paths (400 bad
+body, 429 rate limited, 502 upstream failure) use the standard JSON envelope via `response.Err`;
+once streaming begins the envelope no longer applies.
+
+**Field-level validation:** `go-playground/validator` (via Gin's `binding` engine — it is the default and only field-level validation library for this project) handles request-field validation. Declare constraints as `binding:"..."` struct tags on the request DTO and let `c.ShouldBindJSON(&req)` enforce them; on error return `response.Err(c, http.StatusBadRequest, err.Error())`. Do not add ad-hoc `len()`/empty checks for things a tag already covers.
+
+- Common tags: `required`, `min`/`max` (length for strings/slices, value for numbers), `gt`/`gte`/`lt`/`lte`, `oneof`.
+- **Slices/maps need `dive`** to validate their *elements*: `binding:"required,min=1,dive,required"` for `[]string`, and `binding:"required,min=1,dive"` for a slice of structs (without `dive`, element/struct-field tags are silently skipped). Directly-nested (non-slice) structs are validated automatically.
+- **Numeric "0 is valid but missing is not"** can't be expressed with `required` (which rejects the zero value). Use a pointer field (`*float64`) plus an explicit `nil` check — see `addPosition` in `handler/portfolio.go`.
+- Reference examples: `analyzeRequest` (`handler/portfolio.go`), `simulateDCARequest` (`handler/dca.go`).
+
 **Pagination convention:** all list endpoints accept `page` (1-based, default `1`) and `size` (default `20`, max `100`) query parameters. Invalid values (`page < 1`, `size < 1`, `size > 100`) return `400 Bad Request`. Compute `offset = (page-1) * size` and `limit = size`.
 
 - **DB-backed list endpoints:** use a single SQL query with `LIMIT $n OFFSET $m` and `COUNT(*) OVER() AS total` (window function) to return both the page of rows and the total count in one round-trip.
@@ -116,6 +129,7 @@ All config values can be overridden at runtime via environment variables. The na
 | `AUTH_GOOGLE_REDIRECT_URL`              | `auth.google.redirect_url`              | —       |
 | `AUTH_JWT_SECRET`                       | `auth.jwt.secret`                       | —       |
 | `THIRD_PARTY_API_FMP_API_KEY`           | `third_party_api.fmp.api_key`           | —       |
+| `THIRD_PARTY_API_GROQ_API_KEY`          | `third_party_api.groq.api_key`          | —       |
 
 Env vars take precedence over `config.yaml`. In production, set secrets via env vars and omit them from `config.yaml`
 entirely.
@@ -159,7 +173,6 @@ slog.InfoContext(ctx, "user upserted", "userID", user.ID)
 **Key dependencies:**
 
 - `gin-gonic/gin` — HTTP routing and middleware
-- `go.mongodb.org/mongo-driver/v2` — MongoDB persistence
 - `quic-go/quic-go` — HTTP/3 (QUIC) support
 
 Module path: `github.com/kanitin/stackvest/backend`

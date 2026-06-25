@@ -22,7 +22,13 @@ auth:
 third_party_api:
   fmp:
     api_key: "YOUR_FMP_API_KEY"
+  groq:
+    api_key: "YOUR_GROQ_API_KEY"
 
 cors:
   allow_origins:
     - "http://localhost:5173"   # add your frontend origin(s) here
+
+portfolio:
+  max_per_user: 10                  # max portfolios a single user can own
+  max_positions_per_portfolio: 20   # max positions within one portfolio

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -37,10 +38,17 @@ type Config struct {
 		FMP struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"fmp"`
+		Groq struct {
+			APIKey string `yaml:"api_key"`
+		} `yaml:"groq"`
 	} `yaml:"third_party_api"`
 	CORS struct {
 		AllowOrigins []string `yaml:"allow_origins"`
 	} `yaml:"cors"`
+	Portfolio struct {
+		MaxPerUser               int `yaml:"max_per_user"`
+		MaxPositionsPerPortfolio int `yaml:"max_positions_per_portfolio"`
+	} `yaml:"portfolio"`
 }
 
 func Load() *Config {
@@ -49,6 +57,8 @@ func Load() *Config {
 	cfg.Log.Level = "info"
 	cfg.Log.Format = "json"
 	cfg.DB.Migrate.Enabled = true
+	cfg.Portfolio.MaxPerUser = 10
+	cfg.Portfolio.MaxPositionsPerPortfolio = 20
 
 	if data, err := os.ReadFile("config.yaml"); err == nil {
 		_ = yaml.Unmarshal(data, cfg)
@@ -85,8 +95,21 @@ func Load() *Config {
 	if v := os.Getenv("THIRD_PARTY_API_FMP_API_KEY"); v != "" {
 		cfg.ThirdPartyAPI.FMP.APIKey = v
 	}
+	if v := os.Getenv("THIRD_PARTY_API_GROQ_API_KEY"); v != "" {
+		cfg.ThirdPartyAPI.Groq.APIKey = v
+	}
 	if v := os.Getenv("CORS_ALLOW_ORIGINS"); v != "" {
 		cfg.CORS.AllowOrigins = strings.Split(v, ",")
+	}
+	if v := os.Getenv("PORTFOLIO_MAX_PER_USER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Portfolio.MaxPerUser = n
+		}
+	}
+	if v := os.Getenv("PORTFOLIO_MAX_POSITIONS_PER_PORTFOLIO"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Portfolio.MaxPositionsPerPortfolio = n
+		}
 	}
 
 	return cfg
