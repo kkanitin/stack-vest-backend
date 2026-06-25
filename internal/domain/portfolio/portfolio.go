@@ -13,6 +13,12 @@ var (
 	ErrPortfolioNotFound     = errors.New("portfolio not found")
 	ErrPortfolioLimitReached = errors.New("portfolio limit reached")
 	ErrPositionLimitReached  = errors.New("position limit reached")
+
+	// ErrPortfolioEmpty is returned when an analysis is requested for a portfolio that
+	// has no holdings. ErrPricingUnavailable is returned when it has holdings but none
+	// could be priced, so no weights can be computed.
+	ErrPortfolioEmpty     = errors.New("portfolio has no holdings to analyze")
+	ErrPricingUnavailable = errors.New("pricing data unavailable")
 )
 
 type Portfolio struct {

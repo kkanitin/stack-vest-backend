@@ -37,6 +37,7 @@ type mockRepo struct {
 	countPositions      func(portfolioID string) (int, error)
 	listPortfolios      func(userID string) ([]*portfoliodomain.Portfolio, error)
 	listPositionsByUser func(userID string) ([]*portfoliodomain.Position, error)
+	listByPortfolioID   func(portfolioID string) ([]*portfoliodomain.Position, error)
 	createCalled        bool
 	addCalled           bool
 }
@@ -75,7 +76,10 @@ func (m *mockRepo) Remove(_ context.Context, _, _ string) error { return nil }
 func (m *mockRepo) Update(_ context.Context, _, _ string, _, _ *float64) (*portfoliodomain.Position, error) {
 	return nil, nil
 }
-func (m *mockRepo) ListByPortfolioID(_ context.Context, _ string) ([]*portfoliodomain.Position, error) {
+func (m *mockRepo) ListByPortfolioID(_ context.Context, portfolioID string) ([]*portfoliodomain.Position, error) {
+	if m.listByPortfolioID != nil {
+		return m.listByPortfolioID(portfolioID)
+	}
 	return nil, nil
 }
 func (m *mockRepo) ListPositionsByUser(_ context.Context, userID string) ([]*portfoliodomain.Position, error) {
@@ -108,6 +112,26 @@ type stubPriceChanger struct{ m1 map[string]float64 }
 
 func (s stubPriceChanger) GetPriceChange(symbol string) (*stockdomain.PriceChange, error) {
 	return &stockdomain.PriceChange{M1: s.m1[symbol]}, nil
+}
+
+// failQuoter errors for every symbol, simulating an upstream quote outage so the priced
+// subset comes back empty.
+type failQuoter struct{}
+
+func (failQuoter) GetQuote(string) (*stockdomain.Quote, error) {
+	return nil, errors.New("quote unavailable")
+}
+
+// selectiveQuoter prices only the symbols in its map; any other symbol returns an error
+// (no quote), so callers exercise the drop-then-renormalize path.
+type selectiveQuoter struct{ price map[string]float64 }
+
+func (s selectiveQuoter) GetQuote(symbol string) (*stockdomain.Quote, error) {
+	p, ok := s.price[symbol]
+	if !ok {
+		return nil, errors.New("no quote")
+	}
+	return &stockdomain.Quote{Symbol: symbol, Price: p}, nil
 }
 
 // quoter/priceChanger are unused by the paths under test; nil is fine since those
@@ -334,5 +358,115 @@ func TestListPortfolios_EnrichesValueAndAssetCount(t *testing.T) {
 	}
 	if ps[1].Value == nil || *ps[1].Value != 0 || ps[1].AssetCount == nil || *ps[1].AssetCount != 0 {
 		t.Fatalf("pf2: expected empty (value 0 / assetCount 0), got %v / %v", ps[1].Value, ps[1].AssetCount)
+	}
+}
+
+func TestBuildAnalysisData_WeightsByMarketValue(t *testing.T) {
+	// AAPL: 3×100 = 300, MSFT: 1×100 = 100 → total 400 → 75% / 25%.
+	repo := &mockRepo{
+		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+			return &portfoliodomain.Portfolio{ID: id, UserID: "u1", Name: "Growth", Description: "tech"}, nil
+		},
+		listByPortfolioID: func(string) ([]*portfoliodomain.Position, error) {
+			return []*portfoliodomain.Position{
+				{PortfolioID: "pf1", Symbol: "AAPL", Shares: 3},
+				{PortfolioID: "pf1", Symbol: "MSFT", Shares: 1},
+			}, nil
+		},
+	}
+	q := stubQuoter{price: map[string]float64{"AAPL": 100, "MSFT": 100}}
+	pc := stubPriceChanger{m1: map[string]float64{}}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, pc)
+
+	data, err := uc.BuildAnalysisData(context.Background(), "a@b.com", "pf1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data.Name != "Growth" || data.Description != "tech" {
+		t.Fatalf("expected name/description carried through, got %q / %q", data.Name, data.Description)
+	}
+	if len(data.Holdings) != 2 {
+		t.Fatalf("expected 2 holdings, got %d", len(data.Holdings))
+	}
+	if data.Holdings[0].Ticker != "AAPL" || data.Holdings[0].Weight != 75 {
+		t.Fatalf("expected AAPL 75%%, got %s %v", data.Holdings[0].Ticker, data.Holdings[0].Weight)
+	}
+	if data.Holdings[1].Ticker != "MSFT" || data.Holdings[1].Weight != 25 {
+		t.Fatalf("expected MSFT 25%%, got %s %v", data.Holdings[1].Ticker, data.Holdings[1].Weight)
+	}
+}
+
+func TestBuildAnalysisData_UnpricedDroppedAndRenormalized(t *testing.T) {
+	// MSFT's quote fails (selectiveQuoter has no entry for it), so it is dropped from the
+	// weight basis. AAPL — the only priced holding — renormalizes to the full 100%.
+	repo := &mockRepo{
+		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+			return &portfoliodomain.Portfolio{ID: id, UserID: "u1", Name: "Growth"}, nil
+		},
+		listByPortfolioID: func(string) ([]*portfoliodomain.Position, error) {
+			return []*portfoliodomain.Position{
+				{PortfolioID: "pf1", Symbol: "AAPL", Shares: 2},
+				{PortfolioID: "pf1", Symbol: "MSFT", Shares: 5},
+			}, nil
+		},
+	}
+	q := selectiveQuoter{price: map[string]float64{"AAPL": 100}} // MSFT errors → dropped
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, stubPriceChanger{m1: map[string]float64{}})
+
+	data, err := uc.BuildAnalysisData(context.Background(), "a@b.com", "pf1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(data.Holdings) != 1 {
+		t.Fatalf("expected MSFT dropped (1 holding), got %d", len(data.Holdings))
+	}
+	if data.Holdings[0].Ticker != "AAPL" || data.Holdings[0].Weight != 100 {
+		t.Fatalf("expected AAPL renormalized to 100%%, got %s %v", data.Holdings[0].Ticker, data.Holdings[0].Weight)
+	}
+}
+
+func TestBuildAnalysisData_Empty(t *testing.T) {
+	repo := &mockRepo{
+		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
+		},
+		listByPortfolioID: func(string) ([]*portfoliodomain.Position, error) {
+			return []*portfoliodomain.Position{}, nil
+		},
+	}
+	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
+
+	_, err := uc.BuildAnalysisData(context.Background(), "a@b.com", "pf1")
+	if !errors.Is(err, portfoliodomain.ErrPortfolioEmpty) {
+		t.Fatalf("expected ErrPortfolioEmpty, got %v", err)
+	}
+}
+
+func TestBuildAnalysisData_NotOwnedReturns404(t *testing.T) {
+	repo := &mockRepo{getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+		return &portfoliodomain.Portfolio{ID: id, UserID: "someone-else"}, nil
+	}}
+	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
+
+	_, err := uc.BuildAnalysisData(context.Background(), "a@b.com", "pf1")
+	if !errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		t.Fatalf("expected ErrPortfolioNotFound, got %v", err)
+	}
+}
+
+func TestBuildAnalysisData_NonePricedReturnsPricingUnavailable(t *testing.T) {
+	repo := &mockRepo{
+		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
+		},
+		listByPortfolioID: func(string) ([]*portfoliodomain.Position, error) {
+			return []*portfoliodomain.Position{{PortfolioID: "pf1", Symbol: "AAPL", Shares: 1}}, nil
+		},
+	}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, failQuoter{}, stubPriceChanger{m1: map[string]float64{}})
+
+	_, err := uc.BuildAnalysisData(context.Background(), "a@b.com", "pf1")
+	if !errors.Is(err, portfoliodomain.ErrPricingUnavailable) {
+		t.Fatalf("expected ErrPricingUnavailable, got %v", err)
 	}
 }

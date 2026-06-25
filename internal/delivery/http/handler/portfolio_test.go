@@ -132,6 +132,51 @@ func TestGetPortfoliosSummaryHandler(t *testing.T) {
 	}
 }
 
+// TestAnalyzePortfolioHandler covers the pre-stream paths of POST /portfolios/{id}/analyze,
+// which return before the analysis use case (nil here) or any pricing is touched. It also
+// confirms the route is reachable and distinct from the stateless POST /portfolios/analyze.
+func TestAnalyzePortfolioHandler(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		repo     *mockPortfolioRepo
+		wantCode int
+	}{
+		{
+			"missing dimensions 400",
+			`{}`,
+			&mockPortfolioRepo{getPortfolio: ownedPortfolio},
+			http.StatusBadRequest,
+		},
+		{
+			"foreign portfolio 404",
+			`{"dimensions":["risk"]}`,
+			&mockPortfolioRepo{getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+				return &portfoliodomain.Portfolio{ID: id, UserID: "another-user"}, nil
+			}},
+			http.StatusNotFound,
+		},
+		{
+			// Owned portfolio with no holdings → ErrPortfolioEmpty (mock ListByPortfolioID
+			// returns an empty slice) → nothing to analyze.
+			"empty portfolio 400",
+			`{"dimensions":["risk"]}`,
+			&mockPortfolioRepo{getPortfolio: ownedPortfolio},
+			http.StatusBadRequest,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newPortfolioRouter(tc.repo)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/portfolios/pf1/analyze", strings.NewReader(tc.body)))
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d (body=%s)", tc.wantCode, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestAddPositionHandler(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -43,6 +44,7 @@ func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	pf.DELETE("/:id/positions/:symbol", h.removePosition)
 	pf.GET("/:id/summary", h.getSummary)
 	pf.GET("/:id/activity", h.getActivity)
+	pf.POST("/:id/analyze", h.analyzePortfolio)
 }
 
 // --- Portfolios ---
@@ -391,13 +393,87 @@ func (h *PortfolioHandler) analyze(c *gin.Context) {
 	}
 	defer body.Close()
 
+	h.streamAnalysis(c, body)
+}
+
+// analyzePortfolioRequest is the body for the per-portfolio analyze endpoint. Unlike the
+// stateless /analyze, the holdings come from the stored portfolio; only the dimensions to
+// analyze across are supplied by the client.
+type analyzePortfolioRequest struct {
+	Dimensions []string `json:"dimensions" binding:"required,min=1,dive,required"`
+}
+
+// analyzePortfolio streams an AI-generated review of a stored portfolio (identified by
+// :id) as Server-Sent Events. Holdings and their actual weights are derived server-side
+// from the portfolio's current market-value allocation; target weights equal actual, so
+// the prompt sees zero drift. Like analyze, it is an exception to the standard response
+// envelope: only the pre-stream error paths (400/404/429/502) use response.Err.
+func (h *PortfolioHandler) analyzePortfolio(c *gin.Context) {
+	var req analyzePortfolioRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Err(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	id := c.Param("id")
+	email := c.GetString(middleware.EmailKey)
+	data, err := h.uc.BuildAnalysisData(c.Request.Context(), email, id)
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
+	if errors.Is(err, portfoliodomain.ErrPortfolioEmpty) {
+		response.Err(c, http.StatusBadRequest, "portfolio has no holdings to analyze")
+		return
+	}
+	if errors.Is(err, portfoliodomain.ErrPricingUnavailable) {
+		slog.WarnContext(c.Request.Context(), "analysis pricing unavailable", "id", id)
+		response.Err(c, http.StatusBadGateway, "pricing data unavailable, try again shortly")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to load portfolio for analysis", "email", email, "id", id, "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to load portfolio")
+		return
+	}
+
+	holdings := make([]analysisuc.Holding, len(data.Holdings))
+	for i, hld := range data.Holdings {
+		// Stored portfolios carry no target allocation; target = actual (zero drift).
+		holdings[i] = analysisuc.Holding{Ticker: hld.Ticker, Actual: hld.Weight, Target: hld.Weight}
+	}
+
+	body, err := h.analyzeUC.Stream(c.Request.Context(), analysisuc.Input{
+		Name:        data.Name,
+		Description: data.Description,
+		Holdings:    holdings,
+		Dimensions:  req.Dimensions,
+	})
+	if errors.Is(err, analysisdomain.ErrRateLimited) {
+		slog.WarnContext(c.Request.Context(), "analysis rate limited")
+		response.Err(c, http.StatusTooManyRequests, "analysis service is rate limited, try again shortly")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to generate analysis", "error", err)
+		response.Err(c, http.StatusBadGateway, "failed to generate analysis")
+		return
+	}
+	defer body.Close()
+
+	h.streamAnalysis(c, body)
+}
+
+// streamAnalysis forwards an upstream SSE body to the client as text/event-stream,
+// flushing each line so nothing buffers. The upstream's own `data: [DONE]` terminal is
+// dropped and exactly one is emitted at the end. Shared by the analyze endpoints; it is
+// an explicit exception to the standard response envelope (see AGENTS.md).
+func (h *PortfolioHandler) streamAnalysis(c *gin.Context, body io.Reader) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Status(http.StatusOK)
 
-	// Forward each upstream SSE line as it arrives, flushing so nothing buffers.
-	// Drop the upstream's own `data: [DONE]` terminal; we emit exactly one below.
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {

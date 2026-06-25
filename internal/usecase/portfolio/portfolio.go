@@ -237,6 +237,66 @@ func (uc *UseCase) GetActivity(ctx context.Context, email, portfolioID string, l
 	return uc.repo.GetActivity(ctx, portfolioID, limit)
 }
 
+// AnalysisHolding is a stored holding paired with its current market-value weight
+// (percent of the portfolio's total priced value).
+type AnalysisHolding struct {
+	Ticker string
+	Weight float64
+}
+
+// AnalysisData is the snapshot of a stored portfolio used to drive an AI analysis: its
+// name/description and each holding's current market-value weight.
+type AnalysisData struct {
+	Name        string
+	Description string
+	Holdings    []AnalysisHolding
+}
+
+// BuildAnalysisData loads an owned portfolio and its holdings, prices them, and returns
+// each holding's current market-value weight (percent). Weights are computed over the
+// priced subset — unpriced symbols are dropped (consistent with the rest of the package)
+// and the remaining weights sum to ~100. Returns ErrPortfolioNotFound (404) when the
+// portfolio is missing or not owned, ErrPortfolioEmpty when it has no holdings, or
+// ErrPricingUnavailable when it has holdings but none could be priced.
+func (uc *UseCase) BuildAnalysisData(ctx context.Context, email, portfolioID string) (*AnalysisData, error) {
+	p, err := uc.ownedPortfolio(ctx, email, portfolioID)
+	if err != nil {
+		return nil, err
+	}
+	positions, err := uc.repo.ListByPortfolioID(ctx, portfolioID)
+	if err != nil {
+		return nil, err
+	}
+	if len(positions) == 0 {
+		return nil, portfoliodomain.ErrPortfolioEmpty
+	}
+
+	// enrichPositions sets ValueUsd from the live quote (best-effort, quote-only — it does
+	// not depend on the 30-day price change, which analysis doesn't need). A symbol whose
+	// quote fails keeps ValueUsd 0 and is dropped from the weight basis; the survivors
+	// renormalize to ~100.
+	uc.enrichPositions(ctx, positions)
+
+	var total float64
+	for _, pos := range positions {
+		if pos.ValueUsd > 0 {
+			total += pos.ValueUsd
+		}
+	}
+	if total <= 0 {
+		return nil, portfoliodomain.ErrPricingUnavailable
+	}
+
+	holdings := make([]AnalysisHolding, 0, len(positions))
+	for _, pos := range positions {
+		if pos.ValueUsd <= 0 {
+			continue
+		}
+		holdings = append(holdings, AnalysisHolding{Ticker: pos.Symbol, Weight: pos.ValueUsd / total * 100})
+	}
+	return &AnalysisData{Name: p.Name, Description: p.Description, Holdings: holdings}, nil
+}
+
 // priceData holds the latest quote and 30-day price change for a symbol. ok is false
 // when either lookup failed, signalling callers to exclude the symbol from value math.
 type priceData struct {
