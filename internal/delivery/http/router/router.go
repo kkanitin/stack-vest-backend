@@ -10,7 +10,7 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 )
 
-func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, portfolioHandler *handler.PortfolioHandler, popularHandler *handler.PopularHandler, sentimentHandler *handler.SentimentHandler, googleClientID string, log *slog.Logger, allowOrigins []string) *gin.Engine {
+func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, portfolioHandler *handler.PortfolioHandler, popularHandler *handler.PopularHandler, sentimentHandler *handler.SentimentHandler, dividendHandler *handler.DividendHandler, googleClientID string, log *slog.Logger, allowOrigins []string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(cors.New(cors.Config{
@@ -35,6 +35,7 @@ func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, u
 	dcaHandler.RegisterRoutes(protected)
 	portfolioHandler.RegisterRoutes(protected)
 	sentimentHandler.RegisterRoutes(protected)
+	dividendHandler.RegisterRoutes(protected)
 
 	return r
 }

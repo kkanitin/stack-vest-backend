@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -42,6 +43,11 @@ type Config struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"groq"`
 	} `yaml:"third_party_api"`
+	Redis struct {
+		Addr     string `yaml:"addr"`
+		Password string `yaml:"password"`
+		DB       int    `yaml:"db"`
+	} `yaml:"redis"`
 	CORS struct {
 		AllowOrigins []string `yaml:"allow_origins"`
 	} `yaml:"cors"`
@@ -57,6 +63,7 @@ func Load() *Config {
 	cfg.Log.Level = "info"
 	cfg.Log.Format = "json"
 	cfg.DB.Migrate.Enabled = true
+	cfg.Redis.Addr = "localhost:6379"
 	cfg.Portfolio.MaxPerUser = 10
 	cfg.Portfolio.MaxPositionsPerPortfolio = 20
 
@@ -64,55 +71,60 @@ func Load() *Config {
 		_ = yaml.Unmarshal(data, cfg)
 	}
 
-	// Environment variable overrides — name = config path uppercased with dots replaced by underscores
-	if v := os.Getenv("SERVER_PORT"); v != "" {
-		cfg.Server.Port = v
-	}
-	if v := os.Getenv("LOG_LEVEL"); v != "" {
-		cfg.Log.Level = v
-	}
-	if v := os.Getenv("LOG_FORMAT"); v != "" {
-		cfg.Log.Format = v
-	}
-	if v := os.Getenv("DB_POSTGRES_DSN"); v != "" {
-		cfg.DB.Postgres.DSN = v
-	}
-	if v := os.Getenv("DB_MIGRATE_ENABLED"); v != "" {
-		cfg.DB.Migrate.Enabled = parseBool(v)
-	}
-	if v := os.Getenv("AUTH_GOOGLE_CLIENT_ID"); v != "" {
-		cfg.Auth.Google.ClientID = v
-	}
-	if v := os.Getenv("AUTH_GOOGLE_CLIENT_SECRET"); v != "" {
-		cfg.Auth.Google.ClientSecret = v
-	}
-	if v := os.Getenv("AUTH_GOOGLE_REDIRECT_URL"); v != "" {
-		cfg.Auth.Google.RedirectURL = v
-	}
-	if v := os.Getenv("AUTH_JWT_SECRET"); v != "" {
-		cfg.Auth.JWT.Secret = v
-	}
-	if v := os.Getenv("THIRD_PARTY_API_FMP_API_KEY"); v != "" {
-		cfg.ThirdPartyAPI.FMP.APIKey = v
-	}
-	if v := os.Getenv("THIRD_PARTY_API_GROQ_API_KEY"); v != "" {
-		cfg.ThirdPartyAPI.Groq.APIKey = v
-	}
-	if v := os.Getenv("CORS_ALLOW_ORIGINS"); v != "" {
-		cfg.CORS.AllowOrigins = strings.Split(v, ",")
-	}
-	if v := os.Getenv("PORTFOLIO_MAX_PER_USER"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Portfolio.MaxPerUser = n
-		}
-	}
-	if v := os.Getenv("PORTFOLIO_MAX_POSITIONS_PER_PORTFOLIO"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Portfolio.MaxPositionsPerPortfolio = n
-		}
-	}
+	// Environment variable overrides — env key = yaml path uppercased, dots
+	// replaced by underscores (e.g. third_party_api.fmp.api_key →
+	// THIRD_PARTY_API_FMP_API_KEY). New config fields are picked up
+	// automatically, no code change needed.
+	applyEnvOverrides(reflect.ValueOf(cfg).Elem(), "")
 
 	return cfg
+}
+
+// applyEnvOverrides walks the config struct and, for every leaf field, applies
+// the matching environment variable (if set and non-empty). The env key is the
+// chain of yaml tags from the root to the field, joined with "_" and uppercased.
+func applyEnvOverrides(v reflect.Value, prefix string) {
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		tag := strings.Split(t.Field(i).Tag.Get("yaml"), ",")[0]
+		if tag == "" || tag == "-" {
+			continue
+		}
+
+		key := strings.ToUpper(tag)
+		if prefix != "" {
+			key = prefix + "_" + key
+		}
+
+		field := v.Field(i)
+		if field.Kind() == reflect.Struct {
+			applyEnvOverrides(field, key)
+			continue
+		}
+
+		if raw := os.Getenv(key); raw != "" {
+			setField(field, raw)
+		}
+	}
+}
+
+// setField parses raw into field according to the field's kind. Unsupported
+// kinds and unparseable values are ignored, leaving the field unchanged.
+func setField(field reflect.Value, raw string) {
+	switch field.Kind() {
+	case reflect.String:
+		field.SetString(raw)
+	case reflect.Bool:
+		field.SetBool(parseBool(raw))
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			field.SetInt(n)
+		}
+	case reflect.Slice:
+		if field.Type().Elem().Kind() == reflect.String {
+			field.Set(reflect.ValueOf(strings.Split(raw, ",")))
+		}
+	}
 }
 
 func parseBool(s string) bool {

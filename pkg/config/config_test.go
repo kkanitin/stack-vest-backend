@@ -53,3 +53,29 @@ third_party_api:
 		t.Errorf("expected env-key (env override), got %s", cfg.ThirdPartyAPI.FMP.APIKey)
 	}
 }
+
+func TestEnvOverrideTypes(t *testing.T) {
+	t.Setenv("REDIS_DB", "3")
+	t.Setenv("DB_MIGRATE_ENABLED", "false")
+	t.Setenv("CORS_ALLOW_ORIGINS", "a.com,b.com")
+
+	cfg := Load()
+	if cfg.Redis.DB != 3 {
+		t.Errorf("expected REDIS_DB=3, got %d", cfg.Redis.DB)
+	}
+	if cfg.DB.Migrate.Enabled != false {
+		t.Errorf("expected DB_MIGRATE_ENABLED=false, got %v", cfg.DB.Migrate.Enabled)
+	}
+	if len(cfg.CORS.AllowOrigins) != 2 || cfg.CORS.AllowOrigins[0] != "a.com" || cfg.CORS.AllowOrigins[1] != "b.com" {
+		t.Errorf("expected [a.com b.com], got %v", cfg.CORS.AllowOrigins)
+	}
+}
+
+func TestEnvOverrideInvalidIntKeepsDefault(t *testing.T) {
+	t.Setenv("REDIS_DB", "notanint")
+
+	cfg := Load()
+	if cfg.Redis.DB != 0 {
+		t.Errorf("expected default REDIS_DB=0 for invalid int, got %d", cfg.Redis.DB)
+	}
+}

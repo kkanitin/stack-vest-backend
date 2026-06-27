@@ -25,6 +25,11 @@ third_party_api:
   groq:
     api_key: "YOUR_GROQ_API_KEY"
 
+redis:
+  addr: "localhost:6379"   # host:port of the Redis used for the dividend cache
+  password: ""
+  db: 0
+
 cors:
   allow_origins:
     - "http://localhost:5173"   # add your frontend origin(s) here
