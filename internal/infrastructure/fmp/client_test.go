@@ -106,6 +106,77 @@ func mustParseDate(s string) time.Time {
 	return t
 }
 
+// TestGetDividendsCalendar_Parsing pins the mapping from FMP's documented
+// /stable/dividends-calendar field names onto dividend.Event, and asserts the
+// from/to range params are sent. A field-name drift would otherwise surface only as
+// a silently empty dividend calendar (zero-valued fields), with all mock-based
+// use-case tests still green. The raw JSON is deliberately a literal, not a
+// struct-encoded fixture, so the test fails if the json tags stop matching FMP.
+func TestGetDividendsCalendar_Parsing(t *testing.T) {
+	// Sample shape taken from a live /stable/dividends-calendar response.
+	const body = `[
+		{"symbol":"EMYB","date":"2026-06-26","recordDate":"2026-06-26","paymentDate":"2026-07-14","declarationDate":"2026-06-17","adjDividend":0.55,"dividend":0.55,"yield":2.53,"frequency":"Annual"},
+		{"symbol":"FGBI","date":"2026-06-26","recordDate":"2026-06-26","paymentDate":"2026-06-30","declarationDate":"2026-05-21","adjDividend":0.01,"dividend":0.01,"yield":0.37,"frequency":"Quarterly"}
+	]`
+	var gotFrom, gotTo string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotFrom = r.URL.Query().Get("from")
+		gotTo = r.URL.Query().Get("to")
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	events, err := client.GetDividendsCalendar(mustParseDate("2026-06-27"), mustParseDate("2026-09-25"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotFrom != "2026-06-27" || gotTo != "2026-09-25" {
+		t.Errorf("range params: want from=2026-06-27 to=2026-09-25, got from=%s to=%s", gotFrom, gotTo)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+
+	e := events[0]
+	if e.Symbol != "EMYB" {
+		t.Errorf("symbol: want EMYB, got %q", e.Symbol)
+	}
+	if !e.ExDate.Equal(mustParseDate("2026-06-26")) {
+		t.Errorf("exDate (from \"date\"): want 2026-06-26, got %v", e.ExDate)
+	}
+	if !e.PaymentDate.Equal(mustParseDate("2026-07-14")) {
+		t.Errorf("paymentDate: want 2026-07-14, got %v", e.PaymentDate)
+	}
+	if !e.DeclarationDate.Equal(mustParseDate("2026-06-17")) {
+		t.Errorf("declarationDate: want 2026-06-17, got %v", e.DeclarationDate)
+	}
+	if e.Dividend != 0.55 {
+		t.Errorf("dividend: want 0.55, got %v", e.Dividend)
+	}
+	if e.Frequency != "Annual" {
+		t.Errorf("frequency: want Annual, got %q", e.Frequency)
+	}
+}
+
+// TestGetDividendsCalendar_EmptyIsNotError ensures an empty window yields an empty
+// slice rather than an error (so the use case negative-caches it).
+func TestGetDividendsCalendar_EmptyIsNotError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	events, err := client.GetDividendsCalendar(mustParseDate("2026-06-27"), mustParseDate("2026-09-25"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("expected 0 events, got %d", len(events))
+	}
+}
+
 func TestSearchSymbolParsing(t *testing.T) {
 	fixture := []fmpSearchResult{
 		{Symbol: "AAPL", Name: "Apple Inc.", Currency: "USD", ExchangeFullName: "NASDAQ Global Select", Exchange: "NASDAQ"},

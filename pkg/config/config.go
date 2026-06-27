@@ -42,6 +42,11 @@ type Config struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"groq"`
 	} `yaml:"third_party_api"`
+	Redis struct {
+		Addr     string `yaml:"addr"`
+		Password string `yaml:"password"`
+		DB       int    `yaml:"db"`
+	} `yaml:"redis"`
 	CORS struct {
 		AllowOrigins []string `yaml:"allow_origins"`
 	} `yaml:"cors"`
@@ -57,6 +62,7 @@ func Load() *Config {
 	cfg.Log.Level = "info"
 	cfg.Log.Format = "json"
 	cfg.DB.Migrate.Enabled = true
+	cfg.Redis.Addr = "localhost:6379"
 	cfg.Portfolio.MaxPerUser = 10
 	cfg.Portfolio.MaxPositionsPerPortfolio = 20
 
@@ -97,6 +103,17 @@ func Load() *Config {
 	}
 	if v := os.Getenv("THIRD_PARTY_API_GROQ_API_KEY"); v != "" {
 		cfg.ThirdPartyAPI.Groq.APIKey = v
+	}
+	if v := os.Getenv("REDIS_ADDR"); v != "" {
+		cfg.Redis.Addr = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		cfg.Redis.Password = v
+	}
+	if v := os.Getenv("REDIS_DB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Redis.DB = n
+		}
 	}
 	if v := os.Getenv("CORS_ALLOW_ORIGINS"); v != "" {
 		cfg.CORS.AllowOrigins = strings.Split(v, ",")

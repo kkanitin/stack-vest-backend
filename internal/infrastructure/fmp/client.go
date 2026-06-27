@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kanitin/stackvest/backend/internal/domain/dca"
+	"github.com/kanitin/stackvest/backend/internal/domain/dividend"
 	"github.com/kanitin/stackvest/backend/internal/domain/stock"
 )
 
@@ -446,6 +447,72 @@ func (c *Client) GetProfile(symbol string) (*stock.CompanyProfile, error) {
 }
 
 var _ stock.ProfileFetcher = (*Client)(nil)
+
+type fmpDividend struct {
+	Symbol          string  `json:"symbol"`
+	Date            string  `json:"date"` // ex-dividend date
+	RecordDate      string  `json:"recordDate"`
+	PaymentDate     string  `json:"paymentDate"`
+	DeclarationDate string  `json:"declarationDate"`
+	Dividend        float64 `json:"dividend"`
+	AdjDividend     float64 `json:"adjDividend"`
+	Yield           float64 `json:"yield"`
+	Frequency       string  `json:"frequency"`
+}
+
+// parseFMPDate parses an FMP "YYYY-MM-DD" date, returning the zero time for empty
+// or malformed values (FMP omits some dates, e.g. paymentDate on a freshly
+// declared dividend).
+func parseFMPDate(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// GetDividendsCalendar returns the market-wide dividend calendar (every symbol's
+// dividends with an ex-date in [from, to]). FMP limits the range to 3 months; the
+// caller is responsible for staying within that. Unlike the per-symbol /dividends
+// endpoint (history only), this endpoint includes upcoming, forward-dated payouts.
+func (c *Client) GetDividendsCalendar(from, to time.Time) ([]dividend.Event, error) {
+	params := url.Values{}
+	params.Set("from", from.Format("2006-01-02"))
+	params.Set("to", to.Format("2006-01-02"))
+	params.Set("apikey", c.apiKey)
+
+	resp, err := c.doGet(c.baseURL + "/dividends-calendar?" + params.Encode())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var raw []fmpDividend
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("fmp decode failed: %w", err)
+	}
+
+	events := make([]dividend.Event, 0, len(raw))
+	for _, r := range raw {
+		events = append(events, dividend.Event{
+			Symbol:          r.Symbol,
+			ExDate:          parseFMPDate(r.Date),
+			RecordDate:      parseFMPDate(r.RecordDate),
+			PaymentDate:     parseFMPDate(r.PaymentDate),
+			DeclarationDate: parseFMPDate(r.DeclarationDate),
+			Dividend:        r.Dividend,
+			AdjDividend:     r.AdjDividend,
+			Yield:           r.Yield,
+			Frequency:       r.Frequency,
+		})
+	}
+	return events, nil
+}
+
+var _ dividend.Fetcher = (*Client)(nil)
 
 type fmpMostActive struct {
 	Symbol string `json:"symbol"`
