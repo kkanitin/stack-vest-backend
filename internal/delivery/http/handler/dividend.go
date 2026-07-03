@@ -13,8 +13,6 @@ import (
 	dividenddomain "github.com/kanitin/stackvest/backend/internal/domain/dividend"
 )
 
-const dateLayout = "2006-01-02"
-
 type dividendCalendarUseCase interface {
 	Execute(ctx context.Context, email string, from, to time.Time) ([]dividenddomain.CalendarEntry, error)
 }
@@ -36,27 +34,23 @@ func (h *DividendHandler) RegisterRoutes(rg *gin.RouterGroup) {
 // Optional `from`/`to` query params (YYYY-MM-DD) narrow the view, but only within
 // the fixed forward window the use case fetches (~today → +75 days): values outside
 // it are clamped, so a request beyond the window returns the available subset rather
-// than an error.
+// than an error. Results are paginated via the standard `page`/`size` query params.
 func (h *DividendHandler) getCalendar(c *gin.Context) {
-	var from, to time.Time
-	if v := c.Query("from"); v != "" {
-		t, err := time.Parse(dateLayout, v)
-		if err != nil {
-			response.Err(c, http.StatusBadRequest, "from must be a date in YYYY-MM-DD format")
-			return
-		}
-		from = t
+	from, ok := parseQueryDate(c, "from")
+	if !ok {
+		return
 	}
-	if v := c.Query("to"); v != "" {
-		t, err := time.Parse(dateLayout, v)
-		if err != nil {
-			response.Err(c, http.StatusBadRequest, "to must be a date in YYYY-MM-DD format")
-			return
-		}
-		to = t
+	to, ok := parseQueryDate(c, "to")
+	if !ok {
+		return
 	}
 	if !from.IsZero() && !to.IsZero() && to.Before(from) {
 		response.Err(c, http.StatusBadRequest, "to must not be before from")
+		return
+	}
+
+	page, size, ok := parsePagination(c)
+	if !ok {
 		return
 	}
 
@@ -69,8 +63,21 @@ func (h *DividendHandler) getCalendar(c *gin.Context) {
 	}
 
 	total := len(entries)
-	response.OKList(c, entries, response.Meta{
+	offset := (page - 1) * size
+	if offset > total {
+		offset = total
+	}
+	end := offset + size
+	if end > total {
+		end = total
+	}
+	pageEntries := entries[offset:end]
+	currentPageCount := len(pageEntries)
+
+	response.OKList(c, pageEntries, response.Meta{
 		Total:            &total,
-		CurrentPageCount: &total,
+		Page:             &page,
+		Size:             &size,
+		CurrentPageCount: &currentPageCount,
 	})
 }
