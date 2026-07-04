@@ -77,21 +77,25 @@ type PortfoliosSummary struct {
 
 type Repository interface {
 	// Portfolios
-	CreatePortfolio(ctx context.Context, userID, name, description string) (*Portfolio, error)
+	// CreatePortfolio enforces maxPortfolios atomically (count-check + insert inside
+	// one transaction, serialized via a row lock) and returns ErrPortfolioLimitReached
+	// if the user is already at the limit.
+	CreatePortfolio(ctx context.Context, userID, name, description string, maxPortfolios int) (*Portfolio, error)
 	ListPortfolios(ctx context.Context, userID string) ([]*Portfolio, error)
 	GetPortfolio(ctx context.Context, id string) (*Portfolio, error)
 	UpdatePortfolio(ctx context.Context, id string, name, description *string) (*Portfolio, error)
 	DeletePortfolio(ctx context.Context, id string) error
-	CountPortfolios(ctx context.Context, userID string) (int, error)
 
 	// Positions (scoped to a portfolio)
-	Add(ctx context.Context, portfolioID, symbol, name string, shares, avgCost float64) (*Position, error)
+	// Add enforces maxPositions atomically (count-check + insert inside one
+	// transaction, serialized via a row lock) and returns ErrPositionLimitReached if
+	// the portfolio is already at the limit.
+	Add(ctx context.Context, portfolioID, symbol, name string, shares, avgCost float64, maxPositions int) (*Position, error)
 	Remove(ctx context.Context, portfolioID, symbol string) error
 	Update(ctx context.Context, portfolioID, symbol string, shares, avgCost *float64) (*Position, error)
 	ListByPortfolioID(ctx context.Context, portfolioID string) ([]*Position, error)
 	// ListPositionsByUser returns every position across all of the user's portfolios,
 	// with PortfolioID set so callers can group by portfolio.
 	ListPositionsByUser(ctx context.Context, userID string) ([]*Position, error)
-	CountPositions(ctx context.Context, portfolioID string) (int, error)
 	GetActivity(ctx context.Context, portfolioID string, limit int) ([]*Activity, error)
 }

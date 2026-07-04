@@ -6,6 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/api/idtoken"
+
+	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 )
 
 const (
@@ -19,14 +21,22 @@ func Auth(googleClientID string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if !strings.HasPrefix(header, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid token"})
+			response.Err(c, http.StatusUnauthorized, "missing or invalid token")
+			c.Abort()
 			return
 		}
 
 		tokenStr := strings.TrimPrefix(header, "Bearer ")
 		payload, err := idtoken.Validate(c.Request.Context(), tokenStr, googleClientID)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			response.Err(c, http.StatusUnauthorized, "invalid token")
+			c.Abort()
+			return
+		}
+
+		if !boolClaim(payload.Claims, "email_verified") {
+			response.Err(c, http.StatusUnauthorized, "email not verified")
+			c.Abort()
 			return
 		}
 
@@ -45,4 +55,13 @@ func stringClaim(claims map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+func boolClaim(claims map[string]interface{}, key string) bool {
+	if v, ok := claims[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return false
 }
