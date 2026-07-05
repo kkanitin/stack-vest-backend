@@ -53,38 +53,37 @@ func (r *PostgresRepository) Remove(ctx context.Context, userID, symbol string) 
 	return nil
 }
 
-func (r *PostgresRepository) ListByUserID(ctx context.Context, userID string) ([]watchlistdomain.Item, int, error) {
+func (r *PostgresRepository) ListByUserID(ctx context.Context, userID string) ([]watchlistdomain.Item, error) {
 	rows, err := r.pool.Query(
 		ctx,
-		`SELECT id, user_id, symbol, name, type, added_at, alerts_enabled, category, COUNT(*) OVER() AS total
+		`SELECT id, user_id, symbol, name, type, added_at, alerts_enabled, category
 		 FROM stackvest.watchlists
 		 WHERE user_id = $1
 		 ORDER BY added_at DESC`,
 		userID,
 	)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer rows.Close()
 
 	var items []watchlistdomain.Item
-	var total int
 	for rows.Next() {
 		var item watchlistdomain.Item
 		if err := rows.Scan(
-			&item.ID, &item.UserID, &item.Symbol, &item.Name, &item.Type, &item.AddedAt, &item.AlertsEnabled, &item.Category, &total,
+			&item.ID, &item.UserID, &item.Symbol, &item.Name, &item.Type, &item.AddedAt, &item.AlertsEnabled, &item.Category,
 		); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	if items == nil {
 		items = []watchlistdomain.Item{}
 	}
-	return items, total, nil
+	return items, nil
 }
 
 func (r *PostgresRepository) SetAlertsEnabled(

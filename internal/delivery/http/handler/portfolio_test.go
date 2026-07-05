@@ -18,11 +18,14 @@ import (
 // methods exercised by the handler paths under test carry overridable behaviour.
 type mockPortfolioRepo struct {
 	getPortfolio    func(id string) (*portfoliodomain.Portfolio, error)
-	countPortfolios func(userID string) (int, error)
-	countPositions  func(portfolioID string) (int, error)
+	createPortfolio func(userID, name, description string, maxPortfolios int) (*portfoliodomain.Portfolio, error)
+	addPosition     func(portfolioID, symbol, name string, shares, avgCost float64, maxPositions int) (*portfoliodomain.Position, error)
 }
 
-func (m *mockPortfolioRepo) CreatePortfolio(_ context.Context, userID, name, description string) (*portfoliodomain.Portfolio, error) {
+func (m *mockPortfolioRepo) CreatePortfolio(_ context.Context, userID, name, description string, maxPortfolios int) (*portfoliodomain.Portfolio, error) {
+	if m.createPortfolio != nil {
+		return m.createPortfolio(userID, name, description, maxPortfolios)
+	}
 	return &portfoliodomain.Portfolio{ID: "pf-new", UserID: userID, Name: name, Description: description}, nil
 }
 func (m *mockPortfolioRepo) ListPortfolios(_ context.Context, _ string) ([]*portfoliodomain.Portfolio, error) {
@@ -38,13 +41,12 @@ func (m *mockPortfolioRepo) UpdatePortfolio(_ context.Context, id string, _, _ *
 	return &portfoliodomain.Portfolio{ID: id}, nil
 }
 func (m *mockPortfolioRepo) DeletePortfolio(_ context.Context, _ string) error { return nil }
-func (m *mockPortfolioRepo) CountPortfolios(_ context.Context, userID string) (int, error) {
-	if m.countPortfolios != nil {
-		return m.countPortfolios(userID)
+func (m *mockPortfolioRepo) Add(
+	_ context.Context, portfolioID, symbol, name string, shares, avgCost float64, maxPositions int,
+) (*portfoliodomain.Position, error) {
+	if m.addPosition != nil {
+		return m.addPosition(portfolioID, symbol, name, shares, avgCost, maxPositions)
 	}
-	return 0, nil
-}
-func (m *mockPortfolioRepo) Add(_ context.Context, portfolioID, symbol, name string, shares, avgCost float64) (*portfoliodomain.Position, error) {
 	return &portfoliodomain.Position{ID: "pos-new", PortfolioID: portfolioID, Symbol: symbol, Name: name, Shares: shares, AvgCost: avgCost}, nil
 }
 func (m *mockPortfolioRepo) Remove(_ context.Context, _, _ string) error { return nil }
@@ -56,12 +58,6 @@ func (m *mockPortfolioRepo) ListByPortfolioID(_ context.Context, _ string) ([]*p
 }
 func (m *mockPortfolioRepo) ListPositionsByUser(_ context.Context, _ string) ([]*portfoliodomain.Position, error) {
 	return []*portfoliodomain.Position{}, nil
-}
-func (m *mockPortfolioRepo) CountPositions(_ context.Context, portfolioID string) (int, error) {
-	if m.countPositions != nil {
-		return m.countPositions(portfolioID)
-	}
-	return 0, nil
 }
 func (m *mockPortfolioRepo) GetActivity(_ context.Context, _ string, _ int) ([]*portfoliodomain.Activity, error) {
 	return []*portfoliodomain.Activity{}, nil
@@ -96,8 +92,15 @@ func TestCreatePortfolioHandler(t *testing.T) {
 		wantCode int
 	}{
 		{"missing name", `{"description":"x"}`, &mockPortfolioRepo{}, http.StatusBadRequest},
-		{"limit reached", `{"name":"Growth"}`, &mockPortfolioRepo{countPortfolios: func(string) (int, error) { return 10, nil }}, http.StatusConflict},
-		{"success", `{"name":"Growth"}`, &mockPortfolioRepo{countPortfolios: func(string) (int, error) { return 0, nil }}, http.StatusCreated},
+		{
+			"limit reached",
+			`{"name":"Growth"}`,
+			&mockPortfolioRepo{createPortfolio: func(string, string, string, int) (*portfoliodomain.Portfolio, error) {
+				return nil, portfoliodomain.ErrPortfolioLimitReached
+			}},
+			http.StatusConflict,
+		},
+		{"success", `{"name":"Growth"}`, &mockPortfolioRepo{}, http.StatusCreated},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,13 +204,18 @@ func TestAddPositionHandler(t *testing.T) {
 		{
 			"position limit 409",
 			`{"symbol":"AAPL","name":"Apple","shares":1,"avgCost":100}`,
-			&mockPortfolioRepo{getPortfolio: ownedPortfolio, countPositions: func(string) (int, error) { return 20, nil }},
+			&mockPortfolioRepo{
+				getPortfolio: ownedPortfolio,
+				addPosition: func(string, string, string, float64, float64, int) (*portfoliodomain.Position, error) {
+					return nil, portfoliodomain.ErrPositionLimitReached
+				},
+			},
 			http.StatusConflict,
 		},
 		{
 			"success 201",
 			`{"symbol":"AAPL","name":"Apple","shares":1,"avgCost":100}`,
-			&mockPortfolioRepo{getPortfolio: ownedPortfolio, countPositions: func(string) (int, error) { return 0, nil }},
+			&mockPortfolioRepo{getPortfolio: ownedPortfolio},
 			http.StatusCreated,
 		},
 	}

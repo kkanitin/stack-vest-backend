@@ -105,6 +105,33 @@ func TestMonthlyRisingPrice(t *testing.T) {
 	}
 }
 
+// TestMonthlyMidMonthStart guards against a regression where monthly targets were
+// hard-anchored to the 1st of the calendar month regardless of startDate. For a
+// mid-month start (the 15th), the old code's first target (Jan 1) predated
+// startDate entirely, fell outside the fetched price range, and was silently
+// dropped — yielding PeriodsCount=2 instead of 3 for this Jan-Mar range.
+func TestMonthlyMidMonthStart(t *testing.T) {
+	start := date("2023-01-15")
+	end := date("2023-03-31")
+	prices := buildPrices(start, end, 100.0)
+
+	uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: prices})
+	result, err := uc.Execute(dca.SimulationInput{
+		Symbol:    "TEST",
+		StartDate: start,
+		EndDate:   end,
+		Amount:    100.0,
+		Frequency: dca.FrequencyMonthly,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.PeriodsCount != 3 {
+		t.Errorf("periodsCount: got %d, want 3", result.PeriodsCount)
+	}
+}
+
 func TestWeekendInvestmentDateResolvesToMonday(t *testing.T) {
 	// 2023-01-01 is a Sunday; the mock only has data from Mon 2023-01-02 onwards
 	start := date("2023-01-01")

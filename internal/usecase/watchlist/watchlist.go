@@ -48,12 +48,19 @@ func (uc *WatchlistUseCase) Add(ctx context.Context, email, symbol, name, itemTy
 	if category == nil {
 		category = []string{}
 	}
+	// Symbol comes from the validated FMP match (canonical casing), but Name/Type
+	// are client-supplied fields on the request DTO — honor them instead of silently
+	// discarding them. Type has no binding:"required", so fall back to FMP's value
+	// when the client omits it.
+	if itemType == "" {
+		itemType = validated.Type
+	}
 	return uc.repo.Add(
 		ctx, &watchlistdomain.Item{
 			UserID:   user.ID,
 			Symbol:   validated.Symbol,
-			Name:     validated.Name,
-			Type:     validated.Type,
+			Name:     name,
+			Type:     itemType,
 			Category: category,
 		},
 	)
@@ -67,10 +74,10 @@ func (uc *WatchlistUseCase) Remove(ctx context.Context, email, symbol string) er
 	return uc.repo.Remove(ctx, user.ID, symbol)
 }
 
-func (uc *WatchlistUseCase) List(ctx context.Context, email string) ([]watchlistdomain.Item, int, error) {
+func (uc *WatchlistUseCase) List(ctx context.Context, email string) ([]watchlistdomain.Item, error) {
 	user, err := uc.userRepo.FindByEmail(ctx, email)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	return uc.repo.ListByUserID(ctx, user.ID)
 }

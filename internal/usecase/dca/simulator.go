@@ -129,8 +129,11 @@ func targetDates(start, end time.Time, freq dca.Frequency) []time.Time {
 		}
 
 	case dca.FrequencyMonthly:
-		// 1st of each calendar month
-		cur := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
+		// Same day-of-month as startDate, then each subsequent calendar month —
+		// mirrors weekly/biweekly's real-start-date anchoring instead of hard-anchoring
+		// to the 1st of the calendar month (which could predate startDate and fall
+		// outside the fetched price range).
+		cur := start
 		for !cur.After(end) {
 			targets = append(targets, cur)
 			cur = cur.AddDate(0, 1, 0)

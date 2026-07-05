@@ -33,8 +33,8 @@ func (m *mockUserRepo) Create(_ context.Context, _ *userdomain.User) (*userdomai
 
 type mockRepo struct {
 	getPortfolio        func(id string) (*portfoliodomain.Portfolio, error)
-	countPortfolios     func(userID string) (int, error)
-	countPositions      func(portfolioID string) (int, error)
+	createPortfolio     func(userID, name, description string, maxPortfolios int) (*portfoliodomain.Portfolio, error)
+	addPosition         func(portfolioID, symbol, name string, shares, avgCost float64, maxPositions int) (*portfoliodomain.Position, error)
 	listPortfolios      func(userID string) ([]*portfoliodomain.Portfolio, error)
 	listPositionsByUser func(userID string) ([]*portfoliodomain.Position, error)
 	listByPortfolioID   func(portfolioID string) ([]*portfoliodomain.Position, error)
@@ -42,8 +42,13 @@ type mockRepo struct {
 	addCalled           bool
 }
 
-func (m *mockRepo) CreatePortfolio(_ context.Context, userID, name, description string) (*portfoliodomain.Portfolio, error) {
+func (m *mockRepo) CreatePortfolio(
+	_ context.Context, userID, name, description string, maxPortfolios int,
+) (*portfoliodomain.Portfolio, error) {
 	m.createCalled = true
+	if m.createPortfolio != nil {
+		return m.createPortfolio(userID, name, description, maxPortfolios)
+	}
 	return &portfoliodomain.Portfolio{ID: "new-pf", UserID: userID, Name: name, Description: description}, nil
 }
 func (m *mockRepo) ListPortfolios(_ context.Context, userID string) ([]*portfoliodomain.Portfolio, error) {
@@ -62,14 +67,13 @@ func (m *mockRepo) UpdatePortfolio(_ context.Context, id string, _, _ *string) (
 	return &portfoliodomain.Portfolio{ID: id}, nil
 }
 func (m *mockRepo) DeletePortfolio(_ context.Context, _ string) error { return nil }
-func (m *mockRepo) CountPortfolios(_ context.Context, userID string) (int, error) {
-	if m.countPortfolios != nil {
-		return m.countPortfolios(userID)
-	}
-	return 0, nil
-}
-func (m *mockRepo) Add(_ context.Context, portfolioID, symbol, name string, shares, avgCost float64) (*portfoliodomain.Position, error) {
+func (m *mockRepo) Add(
+	_ context.Context, portfolioID, symbol, name string, shares, avgCost float64, maxPositions int,
+) (*portfoliodomain.Position, error) {
 	m.addCalled = true
+	if m.addPosition != nil {
+		return m.addPosition(portfolioID, symbol, name, shares, avgCost, maxPositions)
+	}
 	return &portfoliodomain.Position{ID: "new-pos", PortfolioID: portfolioID, Symbol: symbol, Name: name, Shares: shares, AvgCost: avgCost}, nil
 }
 func (m *mockRepo) Remove(_ context.Context, _, _ string) error { return nil }
@@ -87,12 +91,6 @@ func (m *mockRepo) ListPositionsByUser(_ context.Context, userID string) ([]*por
 		return m.listPositionsByUser(userID)
 	}
 	return nil, nil
-}
-func (m *mockRepo) CountPositions(_ context.Context, portfolioID string) (int, error) {
-	if m.countPositions != nil {
-		return m.countPositions(portfolioID)
-	}
-	return 0, nil
 }
 func (m *mockRepo) GetActivity(_ context.Context, _ string, _ int) ([]*portfoliodomain.Activity, error) {
 	return nil, nil
@@ -145,20 +143,23 @@ func newUC(repo portfoliodomain.Repository, userRepo userdomain.Repository, maxP
 // --- tests ---
 
 func TestCreatePortfolio_LimitReached(t *testing.T) {
-	repo := &mockRepo{countPortfolios: func(string) (int, error) { return 10, nil }}
+	// Limit enforcement is atomic inside the repo (count-check + insert in one
+	// transaction, see internal/repository/portfolio/postgres.go); at the usecase
+	// level this is exercised by having the mock's CreatePortfolio itself report the
+	// limit, mirroring what the real repo method would return.
+	repo := &mockRepo{createPortfolio: func(string, string, string, int) (*portfoliodomain.Portfolio, error) {
+		return nil, portfoliodomain.ErrPortfolioLimitReached
+	}}
 	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
 
 	_, err := uc.CreatePortfolio(context.Background(), "a@b.com", "Growth", "")
 	if !errors.Is(err, portfoliodomain.ErrPortfolioLimitReached) {
 		t.Fatalf("expected ErrPortfolioLimitReached, got %v", err)
 	}
-	if repo.createCalled {
-		t.Fatal("CreatePortfolio should not be called when limit is reached")
-	}
 }
 
 func TestCreatePortfolio_UnderLimit(t *testing.T) {
-	repo := &mockRepo{countPortfolios: func(string) (int, error) { return 3, nil }}
+	repo := &mockRepo{}
 	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
 
 	p, err := uc.CreatePortfolio(context.Background(), "a@b.com", "Growth", "long term")
@@ -186,20 +187,22 @@ func TestAddPosition_PortfolioNotOwned(t *testing.T) {
 }
 
 func TestAddPosition_PositionLimitReached(t *testing.T) {
+	// Limit enforcement is atomic inside the repo (count-check + insert in one
+	// transaction, see internal/repository/portfolio/postgres.go); at the usecase
+	// level this is exercised by having the mock's Add itself report the limit.
 	repo := &mockRepo{
 		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
 			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
 		},
-		countPositions: func(string) (int, error) { return 20, nil },
+		addPosition: func(string, string, string, float64, float64, int) (*portfoliodomain.Position, error) {
+			return nil, portfoliodomain.ErrPositionLimitReached
+		},
 	}
 	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
 
 	_, err := uc.AddPosition(context.Background(), "a@b.com", "pf1", "AAPL", "Apple", 1, 100)
 	if !errors.Is(err, portfoliodomain.ErrPositionLimitReached) {
 		t.Fatalf("expected ErrPositionLimitReached, got %v", err)
-	}
-	if repo.addCalled {
-		t.Fatal("Add should not be called when position limit is reached")
 	}
 }
 
@@ -208,7 +211,6 @@ func TestAddPosition_Success(t *testing.T) {
 		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
 			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
 		},
-		countPositions: func(string) (int, error) { return 5, nil },
 	}
 	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
 

@@ -26,7 +26,7 @@ type Client struct {
 func NewClient(apiKey string) *Client {
 	return &Client{
 		apiKey:     apiKey,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 20 * time.Second},
 		baseURL:    "https://financialmodelingprep.com/stable",
 	}
 }
@@ -36,13 +36,13 @@ const (
 	maxRetryDelay = 2 * time.Second
 )
 
-func (c *Client) doGet(url string) (*http.Response, error) {
+func (c *Client) doGet(rawURL string) (*http.Response, error) {
 	backoff := 200 * time.Millisecond
 
 	for attempt := range maxRetries {
-		resp, err := c.httpClient.Get(url)
+		resp, err := c.httpClient.Get(rawURL)
 		if err != nil {
-			return nil, fmt.Errorf("fmp request failed: %w", err)
+			return nil, fmt.Errorf("fmp request failed: %s: %w", redactURL(rawURL), unwrapTransportErr(err))
 		}
 		if resp.StatusCode != http.StatusTooManyRequests {
 			return resp, nil
@@ -71,6 +71,28 @@ func (c *Client) doGet(url string) (*http.Response, error) {
 		backoff *= 2
 	}
 	return nil, ErrRateLimited
+}
+
+// redactURL strips the query string (which carries apikey) so a URL is safe to
+// include in an error message or log line.
+func redactURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "fmp-request"
+	}
+	u.RawQuery = ""
+	return u.String()
+}
+
+// unwrapTransportErr returns a *url.Error's inner error (DNS failure, timeout,
+// connection reset) when present. Unlike (*url.Error).Error(), the inner .Err does
+// not embed the original request URL, so it's safe to log verbatim.
+func unwrapTransportErr(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return uerr.Err
+	}
+	return err
 }
 
 type fmpSearchResult struct {
@@ -201,7 +223,7 @@ func (c *Client) GetPriceChange(symbol string) (*stock.PriceChange, error) {
 		return nil, fmt.Errorf("fmp decode failed: %w", err)
 	}
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("symbol not found: %s", symbol)
+		return nil, stock.ErrSymbolNotFound
 	}
 
 	r := raw[0]

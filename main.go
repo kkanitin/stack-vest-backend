@@ -42,6 +42,11 @@ func main() {
 
 	slog.Info("starting StackVest backend", "port", cfg.Server.Port)
 
+	if cfg.Auth.JWT.Secret == "" {
+		slog.Error("auth.jwt.secret must be set (config.yaml auth.jwt.secret or AUTH_JWT_SECRET env var)")
+		os.Exit(1)
+	}
+
 	pool, err := database.NewPostgresPool(context.Background(), cfg.DB.Postgres.DSN)
 	if err != nil {
 		slog.Error("failed to connect to PostgreSQL", "error", err)

@@ -51,16 +51,11 @@ func Run(dsn string) error {
 			return nil
 		}
 		// DB version is ahead of available source files (e.g. after consolidating
-		// migrations). Reset to no version and re-apply; all migrations are idempotent.
-		if strings.Contains(err.Error(), "no migration found for version") {
-			if forceErr := m.Force(-1); forceErr != nil {
-				return fmt.Errorf("migrate: force version: %w", forceErr)
-			}
-			if retryErr := m.Up(); retryErr != nil && !errors.Is(retryErr, migrate.ErrNoChange) {
-				return fmt.Errorf("migrate: up: %w", retryErr)
-			}
-			return nil
-		}
+		// migrations). Several migrations do non-idempotent DDL (bare ADD COLUMN /
+		// CREATE TABLE, no IF NOT EXISTS), so blindly forcing to -1 and replaying
+		// everything is guaranteed to fail on an already-provisioned DB and leaves the
+		// tracking table dirty, crash-looping on every restart. Surface the original
+		// error instead so an operator can investigate and resolve it deliberately.
 		return fmt.Errorf("migrate: up: %w", err)
 	}
 	return nil

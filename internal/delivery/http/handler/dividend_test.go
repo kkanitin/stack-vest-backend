@@ -51,6 +51,7 @@ func TestGetCalendar(t *testing.T) {
 		{"to before from", "/dividends/calendar?from=2026-02-01&to=2026-01-01", nil, nil, http.StatusBadRequest},
 		{"size too large", "/dividends/calendar?size=101", nil, nil, http.StatusBadRequest},
 		{"page too small", "/dividends/calendar?page=0", nil, nil, http.StatusBadRequest},
+		{"page huge", "/dividends/calendar?page=9223372036854775807&size=100", nil, nil, http.StatusBadRequest},
 		{"use-case error", "/dividends/calendar", nil, errors.New("upstream error"), http.StatusInternalServerError},
 		{"success", "/dividends/calendar", makeEntries(3), nil, http.StatusOK},
 	}
