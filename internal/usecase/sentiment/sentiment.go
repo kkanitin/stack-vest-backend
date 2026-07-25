@@ -2,6 +2,8 @@ package sentimentuc
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"time"
 
 	sentimentdomain "github.com/kanitin/stackvest/backend/internal/domain/sentiment"
@@ -13,6 +15,10 @@ import (
 const (
 	vixSymbol   = "^VIX"
 	indexSymbol = "^GSPC" // S&P 500 — momentum proxy
+
+	// negativeTTL: a failed compute is retried after this interval rather than
+	// on every request during an outage.
+	negativeTTL = time.Minute
 )
 
 // marketDataProvider is implemented by *fmp.Client.
@@ -24,36 +30,71 @@ type marketDataProvider interface {
 
 // UseCase computes the daily composite sentiment score from FMP-sourced
 // signals (VIX level, index momentum, market breadth), cached for ttl so the
-// underlying FMP calls happen at most once per cache window.
+// underlying FMP calls happen at most once per cache window. Concurrent
+// misses are coalesced via TTL.Fill's singleflight.
 type UseCase struct {
 	market marketDataProvider
 	cache  *cache.TTL[*sentimentdomain.Score]
 }
 
 func NewUseCase(market marketDataProvider, ttl time.Duration) *UseCase {
-	return &UseCase{market: market, cache: cache.NewTTL[*sentimentdomain.Score](ttl)}
+	return &UseCase{market: market, cache: cache.NewTTLWithNegative[*sentimentdomain.Score](ttl, negativeTTL)}
 }
 
 func (uc *UseCase) Execute(ctx context.Context) (*sentimentdomain.Score, error) {
-	if cached, ok := uc.cache.Get(); ok {
-		return cached, nil
+	result, healthy := uc.cache.Fill(func() (*sentimentdomain.Score, bool) {
+		score, err := uc.compute(ctx)
+		if err != nil {
+			return nil, false
+		}
+		return score, true
+	})
+	if !healthy {
+		return nil, fmt.Errorf("sentiment data unavailable")
 	}
+	return result, nil
+}
 
-	vix, err := uc.market.GetQuote(vixSymbol)
-	if err != nil {
-		return nil, err
+// compute fetches the four independent signals in parallel — none depends on
+// another's result — then derives the composite score.
+func (uc *UseCase) compute(ctx context.Context) (*sentimentdomain.Score, error) {
+	var (
+		vix, index            *stock.Quote
+		gainers, losers       []fmp.MarketMover
+		vixErr, indexErr      error
+		gainersErr, losersErr error
+		wg                    sync.WaitGroup
+	)
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		vix, vixErr = uc.market.GetQuote(vixSymbol)
+	}()
+	go func() {
+		defer wg.Done()
+		index, indexErr = uc.market.GetQuote(indexSymbol)
+	}()
+	go func() {
+		defer wg.Done()
+		gainers, gainersErr = uc.market.GetBiggestGainers()
+	}()
+	go func() {
+		defer wg.Done()
+		losers, losersErr = uc.market.GetBiggestLosers()
+	}()
+	wg.Wait()
+
+	if vixErr != nil {
+		return nil, vixErr
 	}
-	index, err := uc.market.GetQuote(indexSymbol)
-	if err != nil {
-		return nil, err
+	if indexErr != nil {
+		return nil, indexErr
 	}
-	gainers, err := uc.market.GetBiggestGainers()
-	if err != nil {
-		return nil, err
+	if gainersErr != nil {
+		return nil, gainersErr
 	}
-	losers, err := uc.market.GetBiggestLosers()
-	if err != nil {
-		return nil, err
+	if losersErr != nil {
+		return nil, losersErr
 	}
 
 	vixScore := sentimentdomain.ScoreFromVIX(vix.Price)
@@ -61,7 +102,7 @@ func (uc *UseCase) Execute(ctx context.Context) (*sentimentdomain.Score, error) 
 	breadthScore := sentimentdomain.ScoreFromBreadth(len(gainers), len(losers))
 	composite := sentimentdomain.CompositeScore(vixScore, momentumScore, breadthScore)
 
-	result := &sentimentdomain.Score{
+	return &sentimentdomain.Score{
 		Score:  composite,
 		Status: sentimentdomain.StatusFromScore(composite),
 		Signals: sentimentdomain.Signals{
@@ -71,7 +112,5 @@ func (uc *UseCase) Execute(ctx context.Context) (*sentimentdomain.Score, error) 
 			LosersCount:        len(losers),
 		},
 		Timestamp: time.Now().UTC(),
-	}
-	uc.cache.Set(result)
-	return result, nil
+	}, nil
 }

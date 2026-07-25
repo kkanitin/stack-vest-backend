@@ -1,11 +1,14 @@
 package fmp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"time"
@@ -40,13 +43,16 @@ func (c *Client) doGet(rawURL string) (*http.Response, error) {
 	backoff := 200 * time.Millisecond
 
 	for attempt := range maxRetries {
-		resp, err := c.httpClient.Get(rawURL)
+		resp, err := c.get(rawURL)
 		if err != nil {
 			return nil, fmt.Errorf("fmp request failed: %s: %w", redactURL(rawURL), unwrapTransportErr(err))
 		}
 		if resp.StatusCode != http.StatusTooManyRequests {
 			return resp, nil
 		}
+		// Drain before Close so the underlying connection can return to the
+		// idle pool for reuse instead of being torn down.
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 
 		if attempt == maxRetries-1 {
@@ -71,6 +77,36 @@ func (c *Client) doGet(rawURL string) (*http.Response, error) {
 		backoff *= 2
 	}
 	return nil, ErrRateLimited
+}
+
+// get issues a single GET, tracing whether the underlying TCP connection was
+// reused from the idle pool and which protocol was negotiated. Logged at
+// debug level since it's diagnostic-only — used to determine whether the
+// client's unconfigured Transport (http.DefaultTransport, MaxIdleConnsPerHost
+// 2) is actually gating connection reuse (relevant only under HTTP/1.1; HTTP/2
+// multiplexes over one connection and the idle-conns cap doesn't apply).
+//
+// Uses context.Background() deliberately: doGet has no ctx parameter today
+// (a request in flight can't be cancelled), and threading ctx through every
+// method on this client is a separate, larger change.
+func (c *Client) get(rawURL string) (*http.Response, error) {
+	var reused, wasIdle bool
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			reused, wasIdle = info.Reused, info.WasIdle
+		},
+	}
+	ctx := httptrace.WithClientTrace(context.Background(), trace)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("fmp http trace", "reused", reused, "was_idle", wasIdle, "proto", resp.Proto)
+	return resp, nil
 }
 
 // redactURL strips the query string (which carries apikey) so a URL is safe to

@@ -1,5 +1,10 @@
 server:
   port: "8080"
+  read_header_timeout_seconds: 10   # optional; defaults to 10 if unset
+  read_timeout_seconds: 30          # optional; defaults to 30 if unset
+  idle_timeout_seconds: 120         # optional; defaults to 120 if unset
+  # write_timeout is intentionally not configurable: a global write deadline
+  # would cut off the SSE analysis stream (POST /api/v1/portfolios/:id/analyze).
 
 log:
   level: "info"       # debug | info | warn | error

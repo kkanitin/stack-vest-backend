@@ -291,24 +291,44 @@ type priceData struct {
 	ok           bool
 }
 
+// fetchConcurrency bounds simultaneous outbound FMP connections per request —
+// without it, fan-out width equals distinct-symbol count (up to 200 at the
+// configured MaxPerUser x MaxPositionsPerPortfolio ceiling).
+const fetchConcurrency = 10
+
 // fetchPrices concurrently fetches the quote and 30-day change for each distinct
-// symbol. Lookups are best-effort: a symbol whose quote or change fails is omitted
-// from the returned map (callers treat a missing entry as "no value available").
+// symbol (the two calls for a given symbol run in parallel with each other too,
+// since neither depends on the other's result). Lookups are best-effort: a
+// symbol whose quote or change fails is omitted from the returned map (callers
+// treat a missing entry as "no value available").
 func (uc *UseCase) fetchPrices(ctx context.Context, symbols []string) map[string]priceData {
 	out := make(map[string]priceData, len(symbols))
 	var mu sync.Mutex
 	g := new(errgroup.Group)
+	g.SetLimit(fetchConcurrency)
 	for _, sym := range symbols {
 		sym := sym
 		g.Go(func() error {
-			q, err := uc.quoter.GetQuote(sym)
-			if err != nil {
-				slog.WarnContext(ctx, "failed to get quote", "symbol", sym, "error", err)
+			var q *stockdomain.Quote
+			var pc *stockdomain.PriceChange
+			var qErr, pcErr error
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				q, qErr = uc.quoter.GetQuote(sym)
+			}()
+			go func() {
+				defer wg.Done()
+				pc, pcErr = uc.priceChanger.GetPriceChange(sym)
+			}()
+			wg.Wait()
+			if qErr != nil {
+				slog.WarnContext(ctx, "failed to get quote", "symbol", sym, "error", qErr)
 				return nil
 			}
-			pc, err := uc.priceChanger.GetPriceChange(sym)
-			if err != nil {
-				slog.WarnContext(ctx, "failed to get price change", "symbol", sym, "error", err)
+			if pcErr != nil {
+				slog.WarnContext(ctx, "failed to get price change", "symbol", sym, "error", pcErr)
 				return nil
 			}
 			mu.Lock()
@@ -411,6 +431,7 @@ func anyPriced(positions []*portfoliodomain.Position, prices map[string]priceDat
 
 func (uc *UseCase) enrichPositions(ctx context.Context, positions []*portfoliodomain.Position) {
 	g := new(errgroup.Group)
+	g.SetLimit(fetchConcurrency)
 	for _, pos := range positions {
 		pos := pos
 		g.Go(func() error {

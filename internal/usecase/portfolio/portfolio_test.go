@@ -3,7 +3,9 @@ package portfolio_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
 	stockdomain "github.com/kanitin/stackvest/backend/internal/domain/stock"
@@ -470,5 +472,104 @@ func TestBuildAnalysisData_NonePricedReturnsPricingUnavailable(t *testing.T) {
 	_, err := uc.BuildAnalysisData(context.Background(), "a@b.com", "pf1")
 	if !errors.Is(err, portfoliodomain.ErrPricingUnavailable) {
 		t.Fatalf("expected ErrPricingUnavailable, got %v", err)
+	}
+}
+
+// delayedQuoter/delayedPriceChanger simulate network latency and track
+// concurrent in-flight calls, for asserting fetchPrices' concurrency bound
+// and quote/price-change parallelism (see docs/performance-review.md #1).
+type delayedQuoter struct {
+	delay     time.Duration
+	inFlight  *atomic.Int64
+	maxInFlee *atomic.Int64
+}
+
+func (d delayedQuoter) GetQuote(symbol string) (*stockdomain.Quote, error) {
+	cur := d.inFlight.Add(1)
+	defer d.inFlight.Add(-1)
+	for {
+		max := d.maxInFlee.Load()
+		if cur <= max || d.maxInFlee.CompareAndSwap(max, cur) {
+			break
+		}
+	}
+	time.Sleep(d.delay)
+	return &stockdomain.Quote{Symbol: symbol, Price: 100}, nil
+}
+
+type delayedPriceChanger struct{ delay time.Duration }
+
+func (d delayedPriceChanger) GetPriceChange(symbol string) (*stockdomain.PriceChange, error) {
+	time.Sleep(d.delay)
+	return &stockdomain.PriceChange{Symbol: symbol, M1: 0}, nil
+}
+
+func distinctPositions(n int) []*portfoliodomain.Position {
+	positions := make([]*portfoliodomain.Position, n)
+	for i := range positions {
+		positions[i] = &portfoliodomain.Position{PortfolioID: "pf1", Symbol: string(rune('A' + i)), Shares: 1}
+	}
+	return positions
+}
+
+func TestGetSummary_QuoteAndPriceChangeRunInParallel(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	repo := &mockRepo{
+		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
+		},
+		listByPortfolioID: func(string) ([]*portfoliodomain.Position, error) {
+			return distinctPositions(5), nil
+		},
+	}
+	var inFlight, maxInFlight atomic.Int64
+	q := delayedQuoter{delay: delay, inFlight: &inFlight, maxInFlee: &maxInFlight}
+	pc := delayedPriceChanger{delay: delay}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, pc)
+
+	start := time.Now()
+	if _, err := uc.GetSummary(context.Background(), "a@b.com", "pf1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	// Sequential quote-then-price-change per symbol (the pre-fix shape) would
+	// take ~2*delay; parallel takes ~1*delay. Assert well under 2*delay to
+	// catch a regression back to sequential without being flaky on timing.
+	if elapsed >= 2*delay {
+		t.Fatalf("expected quote/price-change to run in parallel (~%v), took %v", delay, elapsed)
+	}
+}
+
+func TestFetchPrices_BoundedConcurrency(t *testing.T) {
+	// Symbol count well above the fetchConcurrency bound (10, see portfolio.go)
+	// so an unbounded fan-out would be detected.
+	const symbolCount = 30
+	repo := &mockRepo{
+		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
+			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
+		},
+		listByPortfolioID: func(string) ([]*portfoliodomain.Position, error) {
+			return distinctPositions(symbolCount), nil
+		},
+	}
+	var inFlight, maxInFlight atomic.Int64
+	q := delayedQuoter{delay: 20 * time.Millisecond, inFlight: &inFlight, maxInFlee: &maxInFlight}
+	pc := delayedPriceChanger{delay: 20 * time.Millisecond}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, pc)
+
+	if _, err := uc.GetSummary(context.Background(), "a@b.com", "pf1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// This constant mirrors fetchConcurrency in portfolio.go (unexported, so
+	// not directly referenceable from this external test package) — keep in
+	// sync if that value changes.
+	const fetchConcurrency = 10
+	if got := maxInFlight.Load(); got > fetchConcurrency {
+		t.Fatalf("expected at most %d concurrent quote calls, observed %d", fetchConcurrency, got)
+	}
+	if got := maxInFlight.Load(); got < 2 {
+		t.Fatalf("expected some concurrency (>1), observed max %d — fan-out may be accidentally serial", got)
 	}
 }
