@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -495,6 +496,53 @@ func TestGetProfile_EmptyResultReturnsSymbolNotFound(t *testing.T) {
 	_, err := client.GetProfile("ZZZZ")
 	if !errors.Is(err, stock.ErrSymbolNotFound) {
 		t.Fatalf("expected ErrSymbolNotFound, got %v", err)
+	}
+}
+
+func TestGetPriceChange_EmptyResultReturnsSymbolNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	_, err := client.GetPriceChange("ZZZZ")
+	if !errors.Is(err, stock.ErrSymbolNotFound) {
+		t.Fatalf("expected ErrSymbolNotFound, got %v", err)
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	got := redactURL("https://financialmodelingprep.com/stable/quote?apikey=super-secret&symbol=AAPL")
+	if strings.Contains(got, "super-secret") {
+		t.Fatalf("redacted URL still contains the api key: %s", got)
+	}
+	if strings.Contains(got, "?") {
+		t.Fatalf("expected query string stripped, got: %s", got)
+	}
+}
+
+func TestUnwrapTransportErr(t *testing.T) {
+	inner := errors.New("connection refused")
+	wrapped := &url.Error{Op: "Get", URL: "https://financialmodelingprep.com/stable/quote?apikey=super-secret", Err: inner}
+
+	got := unwrapTransportErr(wrapped)
+	if got != inner {
+		t.Fatalf("expected inner error unwrapped, got %v", got)
+	}
+	if strings.Contains(got.Error(), "super-secret") {
+		t.Fatalf("unwrapped error leaks the api key: %s", got.Error())
+	}
+}
+
+func TestDoGet_TransportErrorDoesNotLeakAPIKey(t *testing.T) {
+	client := &Client{apiKey: "super-secret", httpClient: &http.Client{}, baseURL: "http://127.0.0.1:0"}
+	_, err := client.GetQuote("AAPL")
+	if err == nil {
+		t.Fatal("expected a transport error dialing an unreachable address")
+	}
+	if strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("error leaks the api key: %v", err)
 	}
 }
 

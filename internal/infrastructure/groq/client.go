@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/kanitin/stackvest/backend/internal/domain/analysis"
 )
@@ -25,9 +27,21 @@ type Client struct {
 
 func NewClient(apiKey string) *Client {
 	return &Client{
-		apiKey:     apiKey,
-		httpClient: &http.Client{},
-		baseURL:    "https://api.groq.com/openai/v1/chat/completions",
+		apiKey: apiKey,
+		// Deliberately no blanket http.Client.Timeout: StreamChat forwards a live SSE
+		// stream, and Timeout bounds the entire request including body read, which
+		// would silently truncate a legitimate long-running analysis. These
+		// transport-level timeouts only bound "stuck before any data arrives";
+		// cancellation of an in-flight stream is left to the caller's own ctx
+		// (already threaded through via http.NewRequestWithContext below).
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 20 * time.Second,
+			},
+		},
+		baseURL: "https://api.groq.com/openai/v1/chat/completions",
 	}
 }
 

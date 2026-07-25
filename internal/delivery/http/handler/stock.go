@@ -129,6 +129,10 @@ func (h *StockHandler) GetPriceChange(c *gin.Context) {
 	}
 
 	result, err := h.priceChangeUC.Execute(symbol)
+	if errors.Is(err, domain.ErrSymbolNotFound) {
+		response.Err(c, http.StatusNotFound, "symbol not found: "+symbol)
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "stock price change failed", "symbol", symbol, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to get stock price change")

@@ -21,6 +21,7 @@ func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, u
 		MaxAge:           12 * time.Hour,
 	}))
 	r.Use(middleware.Logger(log))
+	r.Use(middleware.RateLimit(2, 20)) // IP-keyed, applies to all routes incl. public
 
 	r.GET("/health", handler.NewHealthHandler().HealthCheck)
 
@@ -28,7 +29,10 @@ func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, u
 	authHandler.RegisterRoutes(v1)
 	popularHandler.RegisterRoutes(v1)
 
-	protected := v1.Group("", middleware.Auth(googleClientID))
+	// RateLimit here runs after Auth so it can key per-user (UserIDKey is only set
+	// once Auth succeeds); this is in addition to, not instead of, the IP-keyed
+	// limiter above.
+	protected := v1.Group("", middleware.Auth(googleClientID), middleware.RateLimit(1, 20))
 	stockHandler.RegisterRoutes(protected)
 	userHandler.RegisterRoutes(protected)
 	watchlistHandler.RegisterRoutes(protected)

@@ -22,15 +22,46 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 
 // --- Portfolios ---
 
-func (r *PostgresRepository) CreatePortfolio(ctx context.Context, userID, name, description string) (*portfoliodomain.Portfolio, error) {
+func (r *PostgresRepository) CreatePortfolio(
+	ctx context.Context, userID, name, description string, maxPortfolios int,
+) (*portfoliodomain.Portfolio, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Lock the user row so a concurrent CreatePortfolio for the same user blocks
+	// here until this transaction commits or rolls back — the count check below
+	// can no longer race with another transaction's insert. The user row always
+	// exists (unlike a to-be-created portfolio row), so this holds even when the
+	// user currently has zero portfolios.
+	if _, err := tx.Exec(ctx, `SELECT id FROM stackvest.users WHERE id = $1 FOR UPDATE`, userID); err != nil {
+		return nil, err
+	}
+
+	var count int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM stackvest.portfolios WHERE user_id = $1`, userID,
+	).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count >= maxPortfolios {
+		return nil, portfoliodomain.ErrPortfolioLimitReached
+	}
+
 	var p portfoliodomain.Portfolio
-	err := r.pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`INSERT INTO stackvest.portfolios (user_id, name, description)
 		 VALUES ($1, $2, $3)
 		 RETURNING id, user_id, name, description, created_at, updated_at`,
 		userID, name, description,
 	).Scan(&p.ID, &p.UserID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -117,23 +148,33 @@ func (r *PostgresRepository) DeletePortfolio(ctx context.Context, id string) err
 	return nil
 }
 
-func (r *PostgresRepository) CountPortfolios(ctx context.Context, userID string) (int, error) {
-	var count int
-	err := r.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM stackvest.portfolios WHERE user_id = $1`,
-		userID,
-	).Scan(&count)
-	return count, err
-}
-
 // --- Positions ---
 
-func (r *PostgresRepository) Add(ctx context.Context, portfolioID, symbol, name string, shares, avgCost float64) (*portfoliodomain.Position, error) {
+func (r *PostgresRepository) Add(
+	ctx context.Context, portfolioID, symbol, name string, shares, avgCost float64, maxPositions int,
+) (*portfoliodomain.Position, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Lock the portfolio row so a concurrent Add for the same portfolio blocks here
+	// until this transaction commits or rolls back — see CreatePortfolio for why the
+	// parent row (not the position rows) is what gets locked.
+	if _, err := tx.Exec(ctx, `SELECT id FROM stackvest.portfolios WHERE id = $1 FOR UPDATE`, portfolioID); err != nil {
+		return nil, err
+	}
+
+	var count int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM stackvest.portfolio_positions WHERE portfolio_id = $1`, portfolioID,
+	).Scan(&count); err != nil {
+		return nil, err
+	}
+	if count >= maxPositions {
+		return nil, portfoliodomain.ErrPositionLimitReached
+	}
 
 	var pos portfoliodomain.Position
 	err = tx.QueryRow(ctx,
@@ -299,15 +340,6 @@ func (r *PostgresRepository) ListPositionsByUser(ctx context.Context, userID str
 		positions = []*portfoliodomain.Position{}
 	}
 	return positions, nil
-}
-
-func (r *PostgresRepository) CountPositions(ctx context.Context, portfolioID string) (int, error) {
-	var count int
-	err := r.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM stackvest.portfolio_positions WHERE portfolio_id = $1`,
-		portfolioID,
-	).Scan(&count)
-	return count, err
 }
 
 func (r *PostgresRepository) GetActivity(ctx context.Context, portfolioID string, limit int) ([]*portfoliodomain.Activity, error) {

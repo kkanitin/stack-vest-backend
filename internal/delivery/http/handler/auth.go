@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +12,11 @@ import (
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
+)
+
+const (
+	oauthStateCookie = "oauth_state"
+	oauthStateMaxAge = 10 * 60 // seconds
 )
 
 type AuthHandler struct {
@@ -27,19 +34,38 @@ func (h *AuthHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	auth.GET("/google/callback", h.googleCallback)
 }
 
-// googleLogin redirects the browser to the Google OAuth consent page.
+// googleLogin redirects the browser to the Google OAuth consent page, carrying a
+// per-request random state nonce that googleCallback verifies against a matching
+// short-lived cookie to prevent OAuth login CSRF.
 func (h *AuthHandler) googleLogin(c *gin.Context) {
-	// TODO: replace with a per-request random state stored in a short-lived cookie for CSRF protection
-	state := "stackvest-oauth-state"
+	state, err := generateState()
+	if err != nil {
+		slog.ErrorContext(c.Request.Context(), "failed to generate oauth state", "error", err)
+		response.Err(c, http.StatusInternalServerError, "failed to start login")
+		return
+	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(oauthStateCookie, state, oauthStateMaxAge, "/", "", isSecureRequest(c), true)
+
 	c.Redirect(http.StatusTemporaryRedirect, h.googleUC.GetAuthURL(state))
 }
 
 // googleCallback handles the redirect from Google, exchanges the code for a JWT.
 func (h *AuthHandler) googleCallback(c *gin.Context) {
-	// TODO: verify state matches the value sent in googleLogin
 	code := c.Query("code")
 	if code == "" {
 		response.Err(c, http.StatusBadRequest, "missing code")
+		return
+	}
+
+	returnedState := c.Query("state")
+	cookieState, cookieErr := c.Cookie(oauthStateCookie)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(oauthStateCookie, "", -1, "/", "", isSecureRequest(c), true) // clear single-use cookie
+
+	if cookieErr != nil || returnedState == "" || returnedState != cookieState {
+		response.Err(c, http.StatusBadRequest, "invalid or missing oauth state")
 		return
 	}
 
@@ -65,4 +91,21 @@ func (h *AuthHandler) googleCallback(c *gin.Context) {
 	}
 
 	response.OK(c, gin.H{"token": signed, "user": user})
+}
+
+// generateState returns a URL-safe random nonce for CSRF protection on the OAuth flow.
+func generateState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// isSecureRequest is a best-effort check for whether the oauth state cookie should
+// carry the Secure flag. Behind a TLS-terminating reverse proxy this reads false
+// unless X-Forwarded-Proto is also checked — acceptable for a short-lived,
+// single-use CSRF nonce.
+func isSecureRequest(c *gin.Context) bool {
+	return c.Request.TLS != nil
 }

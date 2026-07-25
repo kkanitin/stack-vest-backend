@@ -66,14 +66,7 @@ func (uc *UseCase) CreatePortfolio(ctx context.Context, email, name, description
 	if err != nil {
 		return nil, fmt.Errorf("user lookup: %w", err)
 	}
-	count, err := uc.repo.CountPortfolios(ctx, user.ID)
-	if err != nil {
-		return nil, err
-	}
-	if count >= uc.maxPortfolios {
-		return nil, portfoliodomain.ErrPortfolioLimitReached
-	}
-	return uc.repo.CreatePortfolio(ctx, user.ID, name, description)
+	return uc.repo.CreatePortfolio(ctx, user.ID, name, description, uc.maxPortfolios)
 }
 
 func (uc *UseCase) ListPortfolios(ctx context.Context, email string) ([]*portfoliodomain.Portfolio, error) {
@@ -126,14 +119,7 @@ func (uc *UseCase) AddPosition(ctx context.Context, email, portfolioID, symbol, 
 	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
 		return nil, err
 	}
-	count, err := uc.repo.CountPositions(ctx, portfolioID)
-	if err != nil {
-		return nil, err
-	}
-	if count >= uc.maxPositions {
-		return nil, portfoliodomain.ErrPositionLimitReached
-	}
-	return uc.repo.Add(ctx, portfolioID, symbol, name, shares, avgCost)
+	return uc.repo.Add(ctx, portfolioID, symbol, name, shares, avgCost, uc.maxPositions)
 }
 
 func (uc *UseCase) RemovePosition(ctx context.Context, email, portfolioID, symbol string) error {

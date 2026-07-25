@@ -37,19 +37,37 @@ type addItemRequest struct {
 }
 
 func (h *WatchlistHandler) list(c *gin.Context) {
+	page, size, ok := parsePagination(c)
+	if !ok {
+		return
+	}
+
 	email := c.GetString(middleware.EmailKey)
 
-	items, total, err := h.watchlistUC.List(c.Request.Context(), email)
+	items, err := h.watchlistUC.List(c.Request.Context(), email)
 	if err != nil {
 		slog.ErrorContext(c.Request.Context(), "failed to list watchlist", "email", email, "error", err)
 		response.Err(c, http.StatusInternalServerError, "failed to list watchlist")
 		return
 	}
 
-	currentPageCount := len(items)
+	total := len(items)
+	offset := (page - 1) * size
+	if offset > total {
+		offset = total
+	}
+	end := offset + size
+	if end > total {
+		end = total
+	}
+	pageItems := items[offset:end]
+	currentPageCount := len(pageItems)
+
 	response.OKList(
-		c, items, response.Meta{
+		c, pageItems, response.Meta{
 			Total:            &total,
+			Page:             &page,
+			Size:             &size,
 			CurrentPageCount: &currentPageCount,
 		},
 	)

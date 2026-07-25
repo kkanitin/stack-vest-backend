@@ -26,6 +26,6 @@ type Item struct {
 type Repository interface {
 	Add(ctx context.Context, item *Item) (*Item, error)
 	Remove(ctx context.Context, userID, symbol string) error
-	ListByUserID(ctx context.Context, userID string) ([]Item, int, error)
+	ListByUserID(ctx context.Context, userID string) ([]Item, error)
 	SetAlertsEnabled(ctx context.Context, userID, symbol string, enabled bool) (*Item, error)
 }
