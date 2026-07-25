@@ -27,7 +27,7 @@ type PopularHandler struct {
 func NewPopularHandler(fmpClient stockFetcher) *PopularHandler {
 	return &PopularHandler{
 		fmp:        fmpClient,
-		stockCache: cache.NewTTL[[]popularEntry](5 * time.Minute),
+		stockCache: cache.NewTTLWithNegative[[]popularEntry](5*time.Minute, 30*time.Second),
 	}
 }
 
@@ -131,32 +131,38 @@ func (h *PopularHandler) list(c *gin.Context) {
 	})
 }
 
+// getStocks fills stockCache on a miss, coalescing concurrent misses into a
+// single upstream call via TTL.Fill. A failed fetch is negative-cached for a
+// short interval so an FMP outage doesn't re-hit it on every request; Fill
+// reports healthy=false both for a fresh failure and for a later warm hit on
+// that negative cache entry, so every caller (leader and coalesced followers
+// alike) sees a consistent result.
 func (h *PopularHandler) getStocks(c *gin.Context) ([]popularEntry, error) {
 	if h.fmp == nil {
 		return nil, fmt.Errorf("stock fetcher not configured")
 	}
 
-	if cached, ok := h.stockCache.Get(); ok {
-		return cached, nil
-	}
+	entries, healthy := h.stockCache.Fill(func() ([]popularEntry, bool) {
+		stocks, err := h.fmp.GetMostActiveStocks(50)
+		if err != nil {
+			slog.WarnContext(c.Request.Context(), "failed to fetch most-active stocks from FMP", "error", err)
+			return nil, false
+		}
 
-	stocks, err := h.fmp.GetMostActiveStocks(50)
-	if err != nil {
-		slog.WarnContext(c.Request.Context(), "failed to fetch most-active stocks from FMP", "error", err)
-		return nil, err
+		out := make([]popularEntry, 0, len(stocks))
+		for _, s := range stocks {
+			out = append(out, popularEntry{
+				Symbol:   s.Symbol,
+				Name:     s.Name,
+				Type:     "stock",
+				Category: []string{"Most Active"},
+			})
+		}
+		return out, true
+	})
+	if !healthy {
+		return nil, fmt.Errorf("most-active stocks unavailable")
 	}
-
-	entries := make([]popularEntry, 0, len(stocks))
-	for _, s := range stocks {
-		entries = append(entries, popularEntry{
-			Symbol:   s.Symbol,
-			Name:     s.Name,
-			Type:     "stock",
-			Category: []string{"Most Active"},
-		})
-	}
-
-	h.stockCache.Set(entries)
 	return entries, nil
 }
 

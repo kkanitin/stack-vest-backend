@@ -11,7 +11,10 @@ import (
 
 type Config struct {
 	Server struct {
-		Port string `yaml:"port"`
+		Port                     string `yaml:"port"`
+		ReadHeaderTimeoutSeconds int    `yaml:"read_header_timeout_seconds"`
+		ReadTimeoutSeconds       int    `yaml:"read_timeout_seconds"`
+		IdleTimeoutSeconds       int    `yaml:"idle_timeout_seconds"`
 	} `yaml:"server"`
 	Log struct {
 		Level  string `yaml:"level"`
@@ -60,6 +63,12 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{}
 	cfg.Server.Port = "8080"
+	// WriteTimeout is deliberately not configured here or wired into
+	// http.Server: a global write deadline would truncate the SSE analysis
+	// stream (POST /api/v1/portfolios/:id/analyze).
+	cfg.Server.ReadHeaderTimeoutSeconds = 10
+	cfg.Server.ReadTimeoutSeconds = 30
+	cfg.Server.IdleTimeoutSeconds = 120
 	cfg.Log.Level = "info"
 	cfg.Log.Format = "json"
 	cfg.DB.Migrate.Enabled = true

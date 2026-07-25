@@ -156,7 +156,7 @@ func TestSearchUseCase_Execute(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			uc := stockuc.NewSearchUseCase(tc.searcher, tc.searcher, time.Minute)
+			uc := stockuc.NewSearchUseCase(tc.searcher, tc.searcher, time.Minute, time.Minute)
 			got, err := uc.Execute(tc.keywords)
 
 			if tc.wantErr {

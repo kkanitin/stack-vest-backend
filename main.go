@@ -12,6 +12,7 @@ import (
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/router"
+	"github.com/kanitin/stackvest/backend/internal/infrastructure/cached"
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
 	groq "github.com/kanitin/stackvest/backend/internal/infrastructure/groq"
 	dividendrepo "github.com/kanitin/stackvest/backend/internal/repository/dividend"
@@ -74,11 +75,19 @@ func main() {
 	userRepo := userrepo.NewPostgresRepository(pool)
 
 	avClient := fmp.NewClient(cfg.ThirdPartyAPI.FMP.APIKey)
-	searchUC := stockuc.NewSearchUseCase(avClient, avClient, 24*time.Hour)
-	priceChangeUC := stockuc.NewPriceChangeUseCase(avClient)
-	quoteUC := stockuc.NewQuoteUseCase(avClient)
+
+	// Caching decorators for Quoter/PriceChanger, wrapped once here so every
+	// consumer below shares one cache instead of each hitting FMP directly.
+	// Short TTL: quotes are live market data, so staleness must stay bounded.
+	const quoteCacheTTL = 30 * time.Second
+	cachedQuoter := cached.NewQuoter(avClient, quoteCacheTTL)
+	cachedPriceChanger := cached.NewPriceChanger(avClient, quoteCacheTTL)
+
+	searchUC := stockuc.NewSearchUseCase(avClient, avClient, 24*time.Hour, 5*time.Minute)
+	priceChangeUC := stockuc.NewPriceChangeUseCase(cachedPriceChanger)
+	quoteUC := stockuc.NewQuoteUseCase(cachedQuoter)
 	historyUC := stockuc.NewHistoryUseCase(avClient)
-	batchPriceChangeUC := stockuc.NewBatchPriceChangeUseCase(avClient)
+	batchPriceChangeUC := stockuc.NewBatchPriceChangeUseCase(cachedPriceChanger)
 	batchHistoryUC := stockuc.NewBatchHistoryUseCase(avClient)
 	profileUC := stockuc.NewProfileUseCase(avClient)
 	stockHandler := handler.NewStockHandler(searchUC, priceChangeUC, quoteUC, historyUC, batchPriceChangeUC, batchHistoryUC, profileUC)
@@ -105,7 +114,7 @@ func main() {
 	analyzeUC := analysisuc.New(groqClient)
 
 	portfolioRepo := portfoliorepo.NewPostgresRepository(pool)
-	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, avClient, avClient, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio)
+	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, cachedQuoter, cachedPriceChanger, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioUC, analyzeUC)
 
 	popularHandler := handler.NewPopularHandler(avClient)
@@ -117,11 +126,18 @@ func main() {
 	dividendUC := dividenduc.NewCalendarUseCase(userRepo, portfolioRepo, avClient, dividendCache)
 	dividendHandler := handler.NewDividendHandler(dividendUC)
 
-	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, sentimentHandler, dividendHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
+	healthHandler := handler.NewHealthHandler(pool)
+
+	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, sentimentHandler, dividendHandler, healthHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
-		Addr:    ":" + cfg.Server.Port,
-		Handler: r,
+		Addr:              ":" + cfg.Server.Port,
+		Handler:           r,
+		ReadHeaderTimeout: time.Duration(cfg.Server.ReadHeaderTimeoutSeconds) * time.Second,
+		ReadTimeout:       time.Duration(cfg.Server.ReadTimeoutSeconds) * time.Second,
+		IdleTimeout:       time.Duration(cfg.Server.IdleTimeoutSeconds) * time.Second,
+		// WriteTimeout is intentionally unset: a global deadline would cut off
+		// the SSE analysis stream (POST /api/v1/portfolios/:id/analyze).
 	}
 
 	runUntilShutdown(srv,

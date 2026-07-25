@@ -10,7 +10,7 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 )
 
-func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, portfolioHandler *handler.PortfolioHandler, popularHandler *handler.PopularHandler, sentimentHandler *handler.SentimentHandler, dividendHandler *handler.DividendHandler, googleClientID string, log *slog.Logger, allowOrigins []string) *gin.Engine {
+func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, portfolioHandler *handler.PortfolioHandler, popularHandler *handler.PopularHandler, sentimentHandler *handler.SentimentHandler, dividendHandler *handler.DividendHandler, healthHandler *handler.HealthHandler, googleClientID string, log *slog.Logger, allowOrigins []string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(cors.New(cors.Config{
@@ -21,9 +21,13 @@ func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, u
 		MaxAge:           12 * time.Hour,
 	}))
 	r.Use(middleware.Logger(log))
+	// Gzip must run after Logger so Logger's response-size log reflects actual
+	// compressed bytes on the wire, and it excludes the SSE analyze routes
+	// itself (compressing a stream would buffer and break it).
+	r.Use(middleware.Gzip())
 	r.Use(middleware.RateLimit(2, 20)) // IP-keyed, applies to all routes incl. public
 
-	r.GET("/health", handler.NewHealthHandler().HealthCheck)
+	r.GET("/health", healthHandler.HealthCheck)
 
 	v1 := r.Group("/api/v1")
 	authHandler.RegisterRoutes(v1)

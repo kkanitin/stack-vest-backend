@@ -23,6 +23,7 @@ func Logger(log *slog.Logger) gin.HandlerFunc {
 			slog.Int("status", status),
 			slog.Duration("latency", time.Since(start)),
 			slog.String("ip", c.ClientIP()),
+			slog.Int("size", c.Writer.Size()),
 		}
 		if query != "" {
 			attrs = append(attrs, slog.String("query", query))
