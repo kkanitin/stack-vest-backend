@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/router"
@@ -38,29 +40,34 @@ import (
 func main() {
 	cfg := config.Load()
 
-	log := logger.New(cfg.Log.Level, cfg.Log.Format)
-	slog.SetDefault(log)
+	log, err := logger.New(cfg.Log.Level, cfg.Log.Format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	zap.ReplaceGlobals(log)
+	defer func() { _ = log.Sync() }() // stdout sink is unbuffered; nothing meaningful to flush or fail here
 
-	slog.Info("starting StackVest backend", "port", cfg.Server.Port)
+	zap.L().Info("starting StackVest backend", zap.String("port", cfg.Server.Port))
 
 	if cfg.Auth.JWT.Secret == "" {
-		slog.Error("auth.jwt.secret must be set (config.yaml auth.jwt.secret or AUTH_JWT_SECRET env var)")
+		zap.L().Error("auth.jwt.secret must be set (config.yaml auth.jwt.secret or AUTH_JWT_SECRET env var)")
 		os.Exit(1)
 	}
 
 	pool, err := database.NewPostgresPool(context.Background(), cfg.DB.Postgres.DSN)
 	if err != nil {
-		slog.Error("failed to connect to PostgreSQL", "error", err)
+		zap.L().Error("failed to connect to PostgreSQL", zap.Error(err))
 		os.Exit(1)
 	}
 
 	if cfg.DB.Migrate.Enabled {
-		slog.Info("running database migrations")
+		zap.L().Info("running database migrations")
 		if err := migrate.Run(cfg.DB.Postgres.DSN); err != nil {
-			slog.Error("failed to run database migrations", "error", err)
+			zap.L().Error("failed to run database migrations", zap.Error(err))
 			os.Exit(1)
 		}
-		slog.Info("database migrations complete")
+		zap.L().Info("database migrations complete")
 	}
 
 	// Redis backs the dividend calendar cache only. A cold Redis is non-fatal: the
@@ -69,7 +76,7 @@ func main() {
 	// is unaffected, so we start the server regardless.
 	redisClient, err := cache.NewRedisClient(context.Background(), cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
-		slog.Warn("Redis unavailable at startup; dividend calendar will bypass cache until it recovers", "error", err)
+		zap.L().Warn("Redis unavailable at startup; dividend calendar will bypass cache until it recovers", zap.Error(err))
 	}
 
 	userRepo := userrepo.NewPostgresRepository(pool)
@@ -146,7 +153,7 @@ func main() {
 		},
 		func(_ context.Context) {
 			if err := redisClient.Close(); err != nil {
-				slog.Error("failed to close Redis client", "error", err)
+				zap.L().Error("failed to close Redis client", zap.Error(err))
 			}
 		},
 	)
@@ -155,7 +162,7 @@ func main() {
 func runUntilShutdown(srv *http.Server, cleanups ...func(context.Context)) {
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server error", "error", err)
+			zap.L().Error("server error", zap.Error(err))
 			os.Exit(1)
 		}
 	}()
@@ -164,18 +171,18 @@ func runUntilShutdown(srv *http.Server, cleanups ...func(context.Context)) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	slog.Info("shutting down server...")
+	zap.L().Info("shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		slog.Error("server forced to shutdown", "error", err)
+		zap.L().Error("server forced to shutdown", zap.Error(err))
 	}
 
 	for _, fn := range cleanups {
 		fn(ctx)
 	}
 
-	slog.Info("server stopped")
+	zap.L().Info("server stopped")
 }

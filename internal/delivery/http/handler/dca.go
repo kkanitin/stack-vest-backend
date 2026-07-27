@@ -3,16 +3,17 @@ package handler
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	"github.com/kanitin/stackvest/backend/internal/domain/dca"
 	dcauc "github.com/kanitin/stackvest/backend/internal/usecase/dca"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 var maxDateRangeYears = map[dca.Frequency]int{
@@ -104,7 +105,7 @@ func (h *DCAHandler) simulate(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "dca simulation failed", "symbol", symbol, "error", err)
+		zap.L().Error("dca simulation failed", logger.RequestID(c.Request.Context()), zap.String("symbol", symbol), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to fetch historical prices")
 		return
 	}

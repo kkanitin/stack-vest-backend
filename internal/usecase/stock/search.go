@@ -1,10 +1,11 @@
 package stockuc
 
 import (
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	domain "github.com/kanitin/stackvest/backend/internal/domain/stock"
 	"github.com/kanitin/stackvest/backend/pkg/cache"
@@ -132,8 +133,8 @@ func (uc *SearchUseCase) filterToStocksAndETFs(keywords string, matches []domain
 	}
 
 	if dropped := len(matches) - len(filtered); dropped > 0 {
-		slog.Debug("search: filtered non-stock/etf results",
-			"keywords", keywords, "dropped", dropped, "kept", len(filtered))
+		zap.L().Debug("search: filtered non-stock/etf results",
+			zap.String("keywords", keywords), zap.Int("dropped", dropped), zap.Int("kept", len(filtered)))
 	}
 	return filtered
 }
@@ -165,9 +166,9 @@ func (uc *SearchUseCase) loadUniverse() *symbolUniverse {
 		wg.Wait()
 
 		if stockErr != nil || etfErr != nil || len(stockSyms) == 0 || len(etfSyms) == 0 {
-			slog.Warn("search: stock/ETF universe unavailable, returning unfiltered results",
-				"stockErr", stockErr, "etfErr", etfErr,
-				"stockCount", len(stockSyms), "etfCount", len(etfSyms))
+			zap.L().Warn("search: stock/ETF universe unavailable, returning unfiltered results",
+				zap.NamedError("stockErr", stockErr), zap.NamedError("etfErr", etfErr),
+				zap.Int("stockCount", len(stockSyms)), zap.Int("etfCount", len(etfSyms)))
 			return nil, false
 		}
 

@@ -2,16 +2,18 @@ package handler
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	"github.com/kanitin/stackvest/backend/pkg/cache"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 // stockFetcher is implemented by *fmp.Client.
@@ -145,7 +147,7 @@ func (h *PopularHandler) getStocks(c *gin.Context) ([]popularEntry, error) {
 	entries, healthy := h.stockCache.Fill(func() ([]popularEntry, bool) {
 		stocks, err := h.fmp.GetMostActiveStocks(50)
 		if err != nil {
-			slog.WarnContext(c.Request.Context(), "failed to fetch most-active stocks from FMP", "error", err)
+			zap.L().Warn("failed to fetch most-active stocks from FMP", logger.RequestID(c.Request.Context()), zap.Error(err))
 			return nil, false
 		}
 

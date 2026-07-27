@@ -1,16 +1,17 @@
 package router
 
 import (
-	"log/slog"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 )
 
-func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, portfolioHandler *handler.PortfolioHandler, popularHandler *handler.PopularHandler, sentimentHandler *handler.SentimentHandler, dividendHandler *handler.DividendHandler, healthHandler *handler.HealthHandler, googleClientID string, log *slog.Logger, allowOrigins []string) *gin.Engine {
+func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, userHandler *handler.UserHandler, watchlistHandler *handler.WatchlistHandler, dcaHandler *handler.DCAHandler, portfolioHandler *handler.PortfolioHandler, popularHandler *handler.PopularHandler, sentimentHandler *handler.SentimentHandler, dividendHandler *handler.DividendHandler, healthHandler *handler.HealthHandler, googleClientID string, log *zap.Logger, allowOrigins []string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(cors.New(cors.Config{

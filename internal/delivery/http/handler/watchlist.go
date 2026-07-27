@@ -2,15 +2,16 @@ package handler
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	watchlistdomain "github.com/kanitin/stackvest/backend/internal/domain/watchlist"
 	watchlistuc "github.com/kanitin/stackvest/backend/internal/usecase/watchlist"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 type WatchlistHandler struct {
@@ -46,7 +47,7 @@ func (h *WatchlistHandler) list(c *gin.Context) {
 
 	items, err := h.watchlistUC.List(c.Request.Context(), email)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to list watchlist", "email", email, "error", err)
+		zap.L().Error("failed to list watchlist", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to list watchlist")
 		return
 	}
@@ -92,8 +93,9 @@ func (h *WatchlistHandler) add(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(
-			c.Request.Context(), "failed to add watchlist item", "email", email, "symbol", req.Symbol, "error", err,
+		zap.L().Error(
+			"failed to add watchlist item",
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("symbol", req.Symbol), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to add watchlist item")
 		return
@@ -127,8 +129,9 @@ func (h *WatchlistHandler) setAlerts(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(
-			c.Request.Context(), "failed to update alerts", "email", email, "symbol", symbol, "error", err,
+		zap.L().Error(
+			"failed to update alerts",
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("symbol", symbol), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to update alerts")
 		return
@@ -147,8 +150,9 @@ func (h *WatchlistHandler) remove(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(
-			c.Request.Context(), "failed to remove watchlist item", "email", email, "symbol", symbol, "error", err,
+		zap.L().Error(
+			"failed to remove watchlist item",
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("symbol", symbol), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to remove watchlist item")
 		return

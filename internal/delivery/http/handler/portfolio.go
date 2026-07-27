@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
@@ -18,6 +18,7 @@ import (
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
 	analysisuc "github.com/kanitin/stackvest/backend/internal/usecase/analysis"
 	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 type PortfolioHandler struct {
@@ -72,7 +73,7 @@ func (h *PortfolioHandler) createPortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to create portfolio", "email", email, "error", err)
+		zap.L().Error("failed to create portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to create portfolio")
 		return
 	}
@@ -83,7 +84,7 @@ func (h *PortfolioHandler) listPortfolios(c *gin.Context) {
 	email := c.GetString(middleware.EmailKey)
 	portfolios, err := h.uc.ListPortfolios(c.Request.Context(), email)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to list portfolios", "email", email, "error", err)
+		zap.L().Error("failed to list portfolios", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to list portfolios")
 		return
 	}
@@ -94,7 +95,7 @@ func (h *PortfolioHandler) getPortfoliosSummary(c *gin.Context) {
 	email := c.GetString(middleware.EmailKey)
 	summary, err := h.uc.GetPortfoliosSummary(c.Request.Context(), email)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to load portfolios summary", "email", email, "error", err)
+		zap.L().Error("failed to load portfolios summary", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to load portfolios summary")
 		return
 	}
@@ -110,7 +111,7 @@ func (h *PortfolioHandler) getPortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to get portfolio", "email", email, "id", id, "error", err)
+		zap.L().Error("failed to get portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to get portfolio")
 		return
 	}
@@ -146,7 +147,7 @@ func (h *PortfolioHandler) updatePortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to update portfolio", "email", email, "id", id, "error", err)
+		zap.L().Error("failed to update portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to update portfolio")
 		return
 	}
@@ -162,7 +163,7 @@ func (h *PortfolioHandler) deletePortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to delete portfolio", "email", email, "id", id, "error", err)
+		zap.L().Error("failed to delete portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to delete portfolio")
 		return
 	}
@@ -214,7 +215,10 @@ func (h *PortfolioHandler) addPosition(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to add position", "email", email, "id", id, "symbol", req.Symbol, "error", err)
+		zap.L().Error(
+			"failed to add position",
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.String("symbol", req.Symbol), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to add position")
 		return
 	}
@@ -259,7 +263,10 @@ func (h *PortfolioHandler) updatePosition(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to update position", "email", email, "id", id, "symbol", symbol, "error", err)
+		zap.L().Error(
+			"failed to update position",
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.String("symbol", symbol), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to update position")
 		return
 	}
@@ -281,7 +288,10 @@ func (h *PortfolioHandler) removePosition(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to remove position", "email", email, "id", id, "symbol", symbol, "error", err)
+		zap.L().Error(
+			"failed to remove position",
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.String("symbol", symbol), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to remove position")
 		return
 	}
@@ -297,7 +307,7 @@ func (h *PortfolioHandler) listPositions(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to list positions", "email", email, "id", id, "error", err)
+		zap.L().Error("failed to list positions", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to list positions")
 		return
 	}
@@ -313,7 +323,7 @@ func (h *PortfolioHandler) getSummary(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to load portfolio", "email", email, "id", id, "error", err)
+		zap.L().Error("failed to load portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to load portfolio")
 		return
 	}
@@ -337,7 +347,7 @@ func (h *PortfolioHandler) getActivity(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to fetch activity", "email", email, "id", id, "error", err)
+		zap.L().Error("failed to fetch activity", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to fetch activity")
 		return
 	}
@@ -382,12 +392,12 @@ func (h *PortfolioHandler) analyze(c *gin.Context) {
 		Dimensions:  req.Dimensions,
 	})
 	if errors.Is(err, analysisdomain.ErrRateLimited) {
-		slog.WarnContext(c.Request.Context(), "analysis rate limited")
+		zap.L().Warn("analysis rate limited", logger.RequestID(c.Request.Context()))
 		response.Err(c, http.StatusTooManyRequests, "analysis service is rate limited, try again shortly")
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to generate analysis", "error", err)
+		zap.L().Error("failed to generate analysis", logger.RequestID(c.Request.Context()), zap.Error(err))
 		response.Err(c, http.StatusBadGateway, "failed to generate analysis")
 		return
 	}
@@ -427,12 +437,15 @@ func (h *PortfolioHandler) analyzePortfolio(c *gin.Context) {
 		return
 	}
 	if errors.Is(err, portfoliodomain.ErrPricingUnavailable) {
-		slog.WarnContext(c.Request.Context(), "analysis pricing unavailable", "id", id)
+		zap.L().Warn("analysis pricing unavailable", logger.RequestID(c.Request.Context()), zap.String("id", id))
 		response.Err(c, http.StatusBadGateway, "pricing data unavailable, try again shortly")
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to load portfolio for analysis", "email", email, "id", id, "error", err)
+		zap.L().Error(
+			"failed to load portfolio for analysis",
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to load portfolio")
 		return
 	}
@@ -450,12 +463,12 @@ func (h *PortfolioHandler) analyzePortfolio(c *gin.Context) {
 		Dimensions:  req.Dimensions,
 	})
 	if errors.Is(err, analysisdomain.ErrRateLimited) {
-		slog.WarnContext(c.Request.Context(), "analysis rate limited")
+		zap.L().Warn("analysis rate limited", logger.RequestID(c.Request.Context()))
 		response.Err(c, http.StatusTooManyRequests, "analysis service is rate limited, try again shortly")
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to generate analysis", "error", err)
+		zap.L().Error("failed to generate analysis", logger.RequestID(c.Request.Context()), zap.Error(err))
 		response.Err(c, http.StatusBadGateway, "failed to generate analysis")
 		return
 	}
@@ -486,7 +499,7 @@ func (h *PortfolioHandler) streamAnalysis(c *gin.Context, body io.Reader) {
 		c.Writer.Flush()
 	}
 	if err := scanner.Err(); err != nil {
-		slog.ErrorContext(c.Request.Context(), "analysis stream truncated", "error", err)
+		zap.L().Error("analysis stream truncated", logger.RequestID(c.Request.Context()), zap.Error(err))
 	}
 
 	fmt.Fprint(c.Writer, "data: [DONE]\n\n")

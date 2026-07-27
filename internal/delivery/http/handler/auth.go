@@ -3,15 +3,16 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"go.uber.org/zap"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 const (
@@ -40,7 +41,7 @@ func (h *AuthHandler) RegisterRoutes(rg *gin.RouterGroup) {
 func (h *AuthHandler) googleLogin(c *gin.Context) {
 	state, err := generateState()
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to generate oauth state", "error", err)
+		zap.L().Error("failed to generate oauth state", logger.RequestID(c.Request.Context()), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to start login")
 		return
 	}
@@ -71,7 +72,7 @@ func (h *AuthHandler) googleCallback(c *gin.Context) {
 
 	user, err := h.googleUC.HandleCallback(c.Request.Context(), code)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "google callback failed", "error", err)
+		zap.L().Error("google callback failed", logger.RequestID(c.Request.Context()), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -85,7 +86,7 @@ func (h *AuthHandler) googleCallback(c *gin.Context) {
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(h.jwtSecret))
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to sign JWT", "error", err)
+		zap.L().Error("failed to sign JWT", logger.RequestID(c.Request.Context()), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to sign token")
 		return
 	}

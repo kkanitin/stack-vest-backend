@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/kanitin/stackvest/backend/internal/domain/dca"
 	"github.com/kanitin/stackvest/backend/internal/domain/dividend"
@@ -105,7 +106,7 @@ func (c *Client) get(rawURL string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	slog.Debug("fmp http trace", "reused", reused, "was_idle", wasIdle, "proto", resp.Proto)
+	zap.L().Debug("fmp http trace", zap.Bool("reused", reused), zap.Bool("was_idle", wasIdle), zap.String("proto", resp.Proto))
 	return resp, nil
 }
 
