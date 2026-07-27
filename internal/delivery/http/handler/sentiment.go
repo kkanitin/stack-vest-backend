@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	domain "github.com/kanitin/stackvest/backend/internal/domain/sentiment"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 type sentimentUseCase interface {
@@ -29,7 +31,7 @@ func (h *SentimentHandler) RegisterRoutes(rg *gin.RouterGroup) {
 func (h *SentimentHandler) Get(c *gin.Context) {
 	result, err := h.uc.Execute(c.Request.Context())
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "sentiment fetch failed", "error", err)
+		zap.L().Error("sentiment fetch failed", logger.RequestID(c.Request.Context()), zap.Error(err))
 		response.Err(c, http.StatusServiceUnavailable, "failed to fetch market sentiment")
 		return
 	}

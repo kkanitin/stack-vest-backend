@@ -3,12 +3,14 @@ package handler
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	domain "github.com/kanitin/stackvest/backend/internal/domain/stock"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 type stockSearchUseCase interface {
@@ -94,7 +96,7 @@ func (h *StockHandler) Search(c *gin.Context) {
 
 	all, err := h.searchUC.Execute(keywords)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "stock search failed", "keywords", keywords, "error", err)
+		zap.L().Error("stock search failed", logger.RequestID(c.Request.Context()), zap.String("keywords", keywords), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to search stocks")
 		return
 	}
@@ -134,7 +136,7 @@ func (h *StockHandler) GetPriceChange(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "stock price change failed", "symbol", symbol, "error", err)
+		zap.L().Error("stock price change failed", logger.RequestID(c.Request.Context()), zap.String("symbol", symbol), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to get stock price change")
 		return
 	}
@@ -155,7 +157,7 @@ func (h *StockHandler) GetQuote(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "stock quote failed", "symbol", symbol, "error", err)
+		zap.L().Error("stock quote failed", logger.RequestID(c.Request.Context()), zap.String("symbol", symbol), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to get stock quote")
 		return
 	}
@@ -183,8 +185,9 @@ func (h *StockHandler) GetHistory(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(
-			c.Request.Context(), "stock history failed", "symbol", symbol, "range", rangeParam, "error", err,
+		zap.L().Error(
+			"stock history failed",
+			logger.RequestID(c.Request.Context()), zap.String("symbol", symbol), zap.String("range", rangeParam), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to fetch history")
 		return
@@ -206,7 +209,7 @@ func (h *StockHandler) GetBatchPriceChanges(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "batch price change failed", "symbols", symbolsParam, "error", err)
+		zap.L().Error("batch price change failed", logger.RequestID(c.Request.Context()), zap.String("symbols", symbolsParam), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to get batch price changes")
 		return
 	}
@@ -234,8 +237,9 @@ func (h *StockHandler) GetBatchHistory(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(
-			c.Request.Context(), "batch history failed", "symbols", symbolsParam, "range", rangeParam, "error", err,
+		zap.L().Error(
+			"batch history failed",
+			logger.RequestID(c.Request.Context()), zap.String("symbols", symbolsParam), zap.String("range", rangeParam), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to fetch batch history")
 		return
@@ -257,7 +261,7 @@ func (h *StockHandler) GetProfile(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "stock profile failed", "symbol", symbol, "error", err)
+		zap.L().Error("stock profile failed", logger.RequestID(c.Request.Context()), zap.String("symbol", symbol), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to get stock profile")
 		return
 	}

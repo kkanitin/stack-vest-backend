@@ -3,15 +3,16 @@ package dividend
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 
 	dividenddomain "github.com/kanitin/stackvest/backend/internal/domain/dividend"
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
 	userdomain "github.com/kanitin/stackvest/backend/internal/domain/user"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 // fetchLookback / fetchForward define the market window fetched and cached. The
@@ -142,7 +143,7 @@ func (uc *CalendarUseCase) Execute(ctx context.Context, email string, from, to t
 func (uc *CalendarUseCase) calendar(ctx context.Context, from, to time.Time) ([]dividenddomain.Event, error) {
 	key := cacheKey(from, to)
 	if events, ok, err := uc.cache.Get(ctx, key); err != nil {
-		slog.WarnContext(ctx, "dividend cache read failed", "key", key, "error", err)
+		zap.L().Warn("dividend cache read failed", logger.RequestID(ctx), zap.String("key", key), zap.Error(err))
 	} else if ok {
 		return events, nil
 	}
@@ -153,7 +154,7 @@ func (uc *CalendarUseCase) calendar(ctx context.Context, from, to time.Time) ([]
 			return nil, err
 		}
 		if err := uc.cache.Set(ctx, key, events); err != nil {
-			slog.WarnContext(ctx, "dividend cache write failed", "key", key, "error", err)
+			zap.L().Warn("dividend cache write failed", logger.RequestID(ctx), zap.String("key", key), zap.Error(err))
 		}
 		return events, nil
 	})

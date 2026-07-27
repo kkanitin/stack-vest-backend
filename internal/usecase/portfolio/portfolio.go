@@ -3,15 +3,16 @@ package portfolio
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"math"
 	"sync"
 
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
 	stockdomain "github.com/kanitin/stackvest/backend/internal/domain/stock"
 	userdomain "github.com/kanitin/stackvest/backend/internal/domain/user"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 type UseCase struct {
@@ -324,11 +325,11 @@ func (uc *UseCase) fetchPrices(ctx context.Context, symbols []string) map[string
 			}()
 			wg.Wait()
 			if qErr != nil {
-				slog.WarnContext(ctx, "failed to get quote", "symbol", sym, "error", qErr)
+				zap.L().Warn("failed to get quote", logger.RequestID(ctx), zap.String("symbol", sym), zap.Error(qErr))
 				return nil
 			}
 			if pcErr != nil {
-				slog.WarnContext(ctx, "failed to get price change", "symbol", sym, "error", pcErr)
+				zap.L().Warn("failed to get price change", logger.RequestID(ctx), zap.String("symbol", sym), zap.Error(pcErr))
 				return nil
 			}
 			mu.Lock()
@@ -437,7 +438,7 @@ func (uc *UseCase) enrichPositions(ctx context.Context, positions []*portfoliodo
 		g.Go(func() error {
 			q, err := uc.quoter.GetQuote(pos.Symbol)
 			if err != nil {
-				slog.WarnContext(ctx, "failed to get quote", "symbol", pos.Symbol, "error", err)
+				zap.L().Warn("failed to get quote", logger.RequestID(ctx), zap.String("symbol", pos.Symbol), zap.Error(err))
 				return nil
 			}
 			pos.ValueUsd = pos.Shares * q.Price

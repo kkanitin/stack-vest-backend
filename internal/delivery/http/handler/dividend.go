@@ -2,15 +2,16 @@ package handler
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/response"
 	dividenddomain "github.com/kanitin/stackvest/backend/internal/domain/dividend"
+	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
 type dividendCalendarUseCase interface {
@@ -57,7 +58,7 @@ func (h *DividendHandler) getCalendar(c *gin.Context) {
 	email := c.GetString(middleware.EmailKey)
 	entries, err := h.calendarUC.Execute(c.Request.Context(), email, from, to)
 	if err != nil {
-		slog.ErrorContext(c.Request.Context(), "failed to build dividend calendar", "email", email, "error", err)
+		zap.L().Error("failed to build dividend calendar", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to build dividend calendar")
 		return
 	}
