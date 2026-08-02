@@ -7,6 +7,10 @@ This file provides guidance to AI agents (Claude Code, Junie, etc.) when working
 ```bash
 # Build
 go build -o bin/backend .
+go build -o bin/migrate ./cmd/migrate
+
+# Migrate (deploy step — run before starting the server)
+go run ./cmd/migrate
 
 # Run
 go run main.go          # starts on :8080
@@ -32,6 +36,17 @@ usecase → domain. Frameworks (Gin, PostgreSQL, Redis) are confined to the oute
 - Project modifications should only be made to files; the user will handle version control.
 
 **Entry point:** `main.go` — loads config, wires the router, and starts the server.
+
+**Second entry point:** `cmd/migrate` — applies pending migrations and exits. Migrations are a deploy step, not part of
+boot: in-process they cost every start a separate connection handshake plus a chain of sequential round trips, even when
+nothing is pending. Deployed environments set `db.migrate.enabled: false` and run `go run ./cmd/migrate` before rollout;
+the in-process path stays for local development.
+
+**Startup rule:** nothing that performs network I/O may block `ListenAndServe`. The Redis ping is verified
+asynchronously (`pkg/cache/redis.go`) and the Postgres pool pre-warms on a background goroutine
+(`pkg/database/postgres.go`) precisely so neither delays the listener. If you add a dependency at boot, either make it
+lazy or justify the added time-to-serving. Each boot step logs a `boot phase` line with `elapsedMs`, and a final
+`boot complete` line gives the total — use them to check the cost of anything you add.
 
 **Layer map:**
 

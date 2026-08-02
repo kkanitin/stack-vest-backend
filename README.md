@@ -20,7 +20,7 @@ external services stay confined to the outer layers.
 - **Market sentiment** and **popular stocks** endpoints
 - **Rate limiting** — token-bucket, keyed per-IP for public routes and per-user for authenticated ones
 - **Consistent API contract** — standard response envelope, `lowerCamelCase` JSON, and uniform pagination across all list endpoints
-- **Operational polish** — structured JSON logging (`slog`), graceful shutdown, and automatic DB migrations on startup
+- **Operational polish** — structured JSON logging (`slog`), graceful shutdown, versioned DB migrations, and a boot path that performs no blocking network I/O (timed per phase in the startup log)
 
 ## Tech Stack
 
@@ -56,7 +56,9 @@ external services stay confined to the outer layers.
    go run main.go
    ```
 
-The server starts on `:8080` by default. Database migrations run automatically on startup.
+The server starts on `:8080` by default. Database migrations run automatically on startup in local
+development. In deployed environments they are a separate step — see
+[Database Migrations](#database-migrations).
 
 ## API
 
@@ -116,7 +118,9 @@ Key settings:
 |---------------------------------|---------|------------------------------------|
 | `SERVER_PORT`                   | `8080`  | HTTP listen port                   |
 | `DB_POSTGRES_DSN`               | —       | PostgreSQL connection string       |
-| `DB_MIGRATE_ENABLED`            | `true`  | Run migrations automatically       |
+| `DB_POSTGRES_MIN_CONNS`         | `2`     | Idle connections pre-warmed at boot |
+| `DB_POSTGRES_MAX_CONNS`         | `10`    | Max pool size                      |
+| `DB_MIGRATE_ENABLED`            | `true`  | Run migrations on startup (set `false` in deployed envs) |
 | `AUTH_GOOGLE_CLIENT_ID`         | —       | Google OAuth client ID             |
 | `AUTH_GOOGLE_CLIENT_SECRET`     | —       | Google OAuth client secret         |
 | `AUTH_JWT_SECRET`               | —       | JWT signing secret                 |
@@ -133,9 +137,25 @@ SQL files embedded in the binary at `pkg/migrate/migrations/`.
 
 **How it works:**
 
-- On startup, all pending `.up.sql` files are applied in version order.
+- All pending `.up.sql` files are applied in version order.
 - Applied versions are tracked in a `schema_migrations` table that golang-migrate creates automatically.
-- Migrations are idempotent — restarting the server when already up-to-date is safe.
+- Migrations are idempotent — running again when already up-to-date is safe.
+
+**Running them:**
+
+There are two paths, and which one you want depends on the environment:
+
+```bash
+go run ./cmd/migrate        # standalone — the deploy step
+```
+
+- **Local development:** `db.migrate.enabled` defaults to `true`, so the server applies migrations on
+  startup and you don't need to do anything.
+- **Deployed environments:** set `DB_MIGRATE_ENABLED=false` (or `db.migrate.enabled: false` in
+  `config.yaml`) and run `cmd/migrate` as a pre-deploy step. Migrating in-process costs every boot a
+  separate connection handshake plus several sequential round trips — even when nothing is pending —
+  which is a real delay against a remote database. `cmd/migrate` exits non-zero on failure, so a
+  pipeline can halt before starting the new server.
 
 **Adding a migration:**
 
@@ -145,16 +165,14 @@ SQL files embedded in the binary at `pkg/migrate/migrations/`.
    000011_your_description.down.sql
    ```
 2. Write the forward change in `.up.sql` and the rollback in `.down.sql`.
-3. Restart the server — the migration runs automatically.
-
-**Disabling auto-migration:**
-
-Set `DB_MIGRATE_ENABLED=false` (or `db.migrate.enabled: false` in `config.yaml`) to skip migrations on
-startup. Useful in environments where schema changes are managed separately.
+3. Restart the server (local) or run `go run ./cmd/migrate`.
 
 ## Project Structure
 
 ```
+cmd/
+  migrate/            # Standalone migration runner (deploy step)
+
 internal/
   domain/             # Entities and repository/usecase interfaces (no external deps)
   usecase/            # Business logic; depends only on domain interfaces
@@ -178,9 +196,10 @@ pkg/
 ## Development
 
 ```bash
-go build -o bin/backend .   # build
-go test ./...               # run tests
-go vet ./...                # vet
+go build -o bin/backend .            # build server
+go build -o bin/migrate ./cmd/migrate # build migration runner
+go test ./...                        # run tests
+go vet ./...                         # vet
 ```
 
 Contributor and architecture conventions (Clean Architecture rules, the response envelope, validation,

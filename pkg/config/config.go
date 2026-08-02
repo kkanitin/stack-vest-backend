@@ -23,6 +23,11 @@ type Config struct {
 	DB struct {
 		Postgres struct {
 			DSN string `yaml:"dsn"`
+			// MinConns idle connections are opened in the background at startup so
+			// the first request doesn't pay a cold connect. MaxConns caps the pool.
+			// Both override any pool_min_conns/pool_max_conns in the DSN.
+			MinConns int `yaml:"min_conns"`
+			MaxConns int `yaml:"max_conns"`
 		} `yaml:"postgres"`
 		Migrate struct {
 			Enabled bool `yaml:"enabled"`
@@ -72,6 +77,8 @@ func Load() *Config {
 	cfg.Log.Level = "info"
 	cfg.Log.Format = "json"
 	cfg.DB.Migrate.Enabled = true
+	cfg.DB.Postgres.MinConns = 2
+	cfg.DB.Postgres.MaxConns = 10
 	cfg.Redis.Addr = "localhost:6379"
 	cfg.Portfolio.MaxPerUser = 10
 	cfg.Portfolio.MaxPositionsPerPortfolio = 20

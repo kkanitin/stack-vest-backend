@@ -70,10 +70,16 @@ func toPgx5DSN(dsn string) string {
 	} else {
 		url = dsn
 	}
+	// lock_timeout bounds the pg_advisory_lock that golang-migrate's driver takes
+	// inside ensureVersionTable. That one is called directly by the driver rather
+	// than through migrate's own lock timeout, and its source documents it as
+	// waiting indefinitely — so without this a concurrent or stuck migration run
+	// hangs forever with no further log output.
+	params := "search_path=stackvest&lock_timeout=15000"
 	if strings.Contains(url, "?") {
-		url += "&search_path=stackvest"
+		url += "&" + params
 	} else {
-		url += "?search_path=stackvest"
+		url += "?" + params
 	}
 	return url
 }

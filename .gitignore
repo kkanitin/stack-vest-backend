@@ -2,7 +2,11 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
-backend
+# Leading slashes matter: a bare "migrate" would also match the pkg/migrate/
+# directory and silently ignore every new file added under it.
+/backend
+/migrate
+/bin/
 app
 *.exe
 *.exe~

@@ -13,8 +13,17 @@ log:
 db:
   postgres:
     dsn: "postgres://user:password@localhost:5432/stackvest?sslmode=disable"
+    # Pool sizing. min_conns connections are opened in the background at startup,
+    # so the first request doesn't pay a cold connect; this costs nothing at boot.
+    # Both override any pool_min_conns/pool_max_conns set in the DSN.
+    min_conns: 2    # optional; defaults to 2 if unset
+    max_conns: 10   # optional; defaults to 10 if unset
   migrate:
-    enabled: true   # set to false to skip auto-migration on startup
+    # Running migrations in-process costs every boot a separate connection
+    # handshake plus several sequential round trips, even when nothing is pending.
+    # Set to false in deployed environments and run `go run ./cmd/migrate` as a
+    # pre-deploy step instead. Left true here so local setup works out of the box.
+    enabled: true
 
 auth:
   google:
