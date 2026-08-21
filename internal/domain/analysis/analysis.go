@@ -17,9 +17,14 @@ type Streamer interface {
 	// StreamChat POSTs the system and user prompts and returns the response body
 	// for streaming.
 	//
-	// It inspects the HTTP status before returning: on 429 it returns
-	// ErrRateLimited, on any other non-2xx status or transport error it returns a
-	// wrapped ErrUpstream with the body already consumed and closed. On success it
-	// returns the open body and the caller is responsible for closing it.
+	// An implementation may try several upstream models before giving up, but it
+	// must settle on one before returning: the caller never observes a fallback as
+	// a partial or restarted stream.
+	//
+	// It inspects the HTTP status before returning: it returns ErrRateLimited when
+	// every model it tried was rate limited, and a wrapped ErrUpstream for any
+	// other exhaustion or transport error, with the body already consumed and
+	// closed. On success it returns the open body and the caller is responsible for
+	// closing it.
 	StreamChat(ctx context.Context, systemPrompt, userPrompt string) (io.ReadCloser, error)
 }

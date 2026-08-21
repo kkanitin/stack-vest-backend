@@ -73,7 +73,10 @@ func (h *PortfolioHandler) createPortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		zap.L().Error("failed to create portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
+		zap.L().Error(
+			"failed to create portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to create portfolio")
 		return
 	}
@@ -84,7 +87,10 @@ func (h *PortfolioHandler) listPortfolios(c *gin.Context) {
 	email := c.GetString(middleware.EmailKey)
 	portfolios, err := h.uc.ListPortfolios(c.Request.Context(), email)
 	if err != nil {
-		zap.L().Error("failed to list portfolios", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
+		zap.L().Error(
+			"failed to list portfolios", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to list portfolios")
 		return
 	}
@@ -95,7 +101,10 @@ func (h *PortfolioHandler) getPortfoliosSummary(c *gin.Context) {
 	email := c.GetString(middleware.EmailKey)
 	summary, err := h.uc.GetPortfoliosSummary(c.Request.Context(), email)
 	if err != nil {
-		zap.L().Error("failed to load portfolios summary", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
+		zap.L().Error(
+			"failed to load portfolios summary", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to load portfolios summary")
 		return
 	}
@@ -111,7 +120,10 @@ func (h *PortfolioHandler) getPortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		zap.L().Error("failed to get portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
+		zap.L().Error(
+			"failed to get portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("id", id), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to get portfolio")
 		return
 	}
@@ -147,7 +159,10 @@ func (h *PortfolioHandler) updatePortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		zap.L().Error("failed to update portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
+		zap.L().Error(
+			"failed to update portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("id", id), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to update portfolio")
 		return
 	}
@@ -163,7 +178,10 @@ func (h *PortfolioHandler) deletePortfolio(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		zap.L().Error("failed to delete portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
+		zap.L().Error(
+			"failed to delete portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("id", id), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to delete portfolio")
 		return
 	}
@@ -217,7 +235,8 @@ func (h *PortfolioHandler) addPosition(c *gin.Context) {
 	if err != nil {
 		zap.L().Error(
 			"failed to add position",
-			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.String("symbol", req.Symbol), zap.Error(err),
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id),
+			zap.String("symbol", req.Symbol), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to add position")
 		return
@@ -265,7 +284,8 @@ func (h *PortfolioHandler) updatePosition(c *gin.Context) {
 	if err != nil {
 		zap.L().Error(
 			"failed to update position",
-			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.String("symbol", symbol), zap.Error(err),
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id),
+			zap.String("symbol", symbol), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to update position")
 		return
@@ -290,7 +310,8 @@ func (h *PortfolioHandler) removePosition(c *gin.Context) {
 	if err != nil {
 		zap.L().Error(
 			"failed to remove position",
-			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.String("symbol", symbol), zap.Error(err),
+			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id),
+			zap.String("symbol", symbol), zap.Error(err),
 		)
 		response.Err(c, http.StatusInternalServerError, "failed to remove position")
 		return
@@ -307,7 +328,10 @@ func (h *PortfolioHandler) listPositions(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		zap.L().Error("failed to list positions", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
+		zap.L().Error(
+			"failed to list positions", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("id", id), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to list positions")
 		return
 	}
@@ -323,7 +347,10 @@ func (h *PortfolioHandler) getSummary(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		zap.L().Error("failed to load portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
+		zap.L().Error(
+			"failed to load portfolio", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("id", id), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to load portfolio")
 		return
 	}
@@ -347,7 +374,10 @@ func (h *PortfolioHandler) getActivity(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		zap.L().Error("failed to fetch activity", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err))
+		zap.L().Error(
+			"failed to fetch activity", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("id", id), zap.Error(err),
+		)
 		response.Err(c, http.StatusInternalServerError, "failed to fetch activity")
 		return
 	}
@@ -385,12 +415,14 @@ func (h *PortfolioHandler) analyze(c *gin.Context) {
 		holdings[i] = analysisuc.Holding{Ticker: h.Ticker, Actual: h.Actual, Target: h.Target}
 	}
 
-	body, err := h.analyzeUC.Stream(c.Request.Context(), analysisuc.Input{
-		Name:        req.Portfolio.Name,
-		Description: req.Portfolio.Description,
-		Holdings:    holdings,
-		Dimensions:  req.Dimensions,
-	})
+	body, err := h.analyzeUC.Stream(
+		c.Request.Context(), analysisuc.Input{
+			Name:        req.Portfolio.Name,
+			Description: req.Portfolio.Description,
+			Holdings:    holdings,
+			Dimensions:  req.Dimensions,
+		},
+	)
 	if errors.Is(err, analysisdomain.ErrRateLimited) {
 		zap.L().Warn("analysis rate limited", logger.RequestID(c.Request.Context()))
 		response.Err(c, http.StatusTooManyRequests, "analysis service is rate limited, try again shortly")
@@ -456,12 +488,14 @@ func (h *PortfolioHandler) analyzePortfolio(c *gin.Context) {
 		holdings[i] = analysisuc.Holding{Ticker: hld.Ticker, Actual: hld.Weight, Target: hld.Weight}
 	}
 
-	body, err := h.analyzeUC.Stream(c.Request.Context(), analysisuc.Input{
-		Name:        data.Name,
-		Description: data.Description,
-		Holdings:    holdings,
-		Dimensions:  req.Dimensions,
-	})
+	body, err := h.analyzeUC.Stream(
+		c.Request.Context(), analysisuc.Input{
+			Name:        data.Name,
+			Description: data.Description,
+			Holdings:    holdings,
+			Dimensions:  req.Dimensions,
+		},
+	)
 	if errors.Is(err, analysisdomain.ErrRateLimited) {
 		zap.L().Warn("analysis rate limited", logger.RequestID(c.Request.Context()))
 		response.Err(c, http.StatusTooManyRequests, "analysis service is rate limited, try again shortly")
@@ -484,8 +518,7 @@ func (h *PortfolioHandler) analyzePortfolio(c *gin.Context) {
 func (h *PortfolioHandler) streamAnalysis(c *gin.Context, body io.Reader) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
-	// No "Connection: keep-alive" header: it is hop-by-hop and illegal over HTTP/2, and
-	// redundant on HTTP/1.1 since Go keeps the connection alive without it.
+	c.Header("Connection", "keep-alive")
 	c.Status(http.StatusOK)
 
 	scanner := bufio.NewScanner(body)
