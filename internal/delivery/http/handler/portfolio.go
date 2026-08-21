@@ -484,7 +484,8 @@ func (h *PortfolioHandler) analyzePortfolio(c *gin.Context) {
 func (h *PortfolioHandler) streamAnalysis(c *gin.Context, body io.Reader) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
+	// No "Connection: keep-alive" header: it is hop-by-hop and illegal over HTTP/2, and
+	// redundant on HTTP/1.1 since Go keeps the connection alive without it.
 	c.Status(http.StatusOK)
 
 	scanner := bufio.NewScanner(body)
