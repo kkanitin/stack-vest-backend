@@ -102,7 +102,7 @@ open; everything else requires a valid JWT (`Authorization: Bearer <token>`).
 
 Responses use a standard envelope (`result`/`results` + `code`/`message`/`errorMessage`, plus `meta`
 for lists); the streaming analysis endpoints are the documented exception. See
-[AGENTS.md](./AGENTS.md#standard-response-envelope) for the full contract.
+[docs/http-conventions.md](./docs/http-conventions.md) for the full contract.
 
 ## Configuration
 
@@ -124,7 +124,7 @@ Key settings:
 | `THIRD_PARTY_API_FMP_API_KEY`   | —       | Financial Modeling Prep API key    |
 | `THIRD_PARTY_API_GROQ_API_KEY`  | —       | Groq API key (AI analysis)         |
 
-See [AGENTS.md](./AGENTS.md#environment-variables) for the complete list.
+See [docs/configuration.md](./docs/configuration.md) for the complete list.
 
 ## Database Migrations
 
@@ -184,4 +184,4 @@ go vet ./...                # vet
 ```
 
 Contributor and architecture conventions (Clean Architecture rules, the response envelope, validation,
-pagination, logging) live in [AGENTS.md](./AGENTS.md).
+pagination, logging) live in [AGENTS.md](./AGENTS.md) and the linked files under [docs/](./docs/).
