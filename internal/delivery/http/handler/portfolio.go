@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -35,6 +36,9 @@ func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	pf.POST("", h.createPortfolio)
 	pf.GET("", h.listPortfolios)
 	pf.GET("/summary", h.getPortfoliosSummary)
+	pf.GET("/history", h.getValueHistory)
+	pf.GET("/positions", h.listAllPositions)
+	pf.GET("/activity", h.getRecentActivity)
 	pf.POST("/analyze", h.analyze)
 	pf.GET("/:id", h.getPortfolio)
 	pf.PATCH("/:id", h.updatePortfolio)
@@ -109,6 +113,75 @@ func (h *PortfolioHandler) getPortfoliosSummary(c *gin.Context) {
 		return
 	}
 	response.OK(c, summary)
+}
+
+type valueHistoryQuery struct {
+	Range string `form:"range" binding:"omitempty,oneof=7D 30D 90D 1Y All"`
+}
+
+func (h *PortfolioHandler) getValueHistory(c *gin.Context) {
+	var q valueHistoryQuery
+	if err := c.ShouldBindQuery(&q); err != nil {
+		response.Err(c, http.StatusBadRequest, "range must be one of: 7D, 30D, 90D, 1Y, All")
+		return
+	}
+	r := portfoliodomain.HistoryRange(q.Range)
+	if r == "" {
+		r = portfoliodomain.HistoryRange30D
+	}
+
+	email := c.GetString(middleware.EmailKey)
+	history, err := h.uc.GetValueHistory(c.Request.Context(), email, r, time.Now())
+	if err != nil {
+		zap.L().Error(
+			"failed to load value history", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("range", string(r)), zap.Error(err),
+		)
+		response.Err(c, http.StatusInternalServerError, "failed to load value history")
+		return
+	}
+	response.OK(c, history)
+}
+
+func (h *PortfolioHandler) listAllPositions(c *gin.Context) {
+	email := c.GetString(middleware.EmailKey)
+	positions, err := h.uc.ListAllPositions(c.Request.Context(), email)
+	if err != nil {
+		zap.L().Error(
+			"failed to list all positions", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.Error(err),
+		)
+		response.Err(c, http.StatusInternalServerError, "failed to list positions")
+		return
+	}
+	response.OK(c, positions)
+}
+
+type recentActivityQuery struct {
+	Limit int `form:"limit" binding:"omitempty,min=1,max=50"`
+}
+
+func (h *PortfolioHandler) getRecentActivity(c *gin.Context) {
+	var q recentActivityQuery
+	if err := c.ShouldBindQuery(&q); err != nil {
+		response.Err(c, http.StatusBadRequest, "limit must be between 1 and 50")
+		return
+	}
+	if q.Limit == 0 {
+		q.Limit = 10
+	}
+
+	email := c.GetString(middleware.EmailKey)
+	activities, err := h.uc.GetRecentActivity(c.Request.Context(), email, q.Limit)
+	if err != nil {
+		zap.L().Error(
+			"failed to fetch recent activity", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.Error(err),
+		)
+		response.Err(c, http.StatusInternalServerError, "failed to fetch activity")
+		return
+	}
+	response.OK(c, activities)
 }
 
 func (h *PortfolioHandler) getPortfolio(c *gin.Context) {

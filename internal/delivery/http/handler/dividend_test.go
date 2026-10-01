@@ -52,6 +52,9 @@ func TestGetCalendar(t *testing.T) {
 		{"size too large", "/dividends/calendar?size=101", nil, nil, http.StatusBadRequest},
 		{"page too small", "/dividends/calendar?page=0", nil, nil, http.StatusBadRequest},
 		{"page huge", "/dividends/calendar?page=9223372036854775807&size=100", nil, nil, http.StatusBadRequest},
+		{"use-case invalid range", "/dividends/calendar", nil, fmt.Errorf("x: %w", dividenddomain.ErrInvalidRange), http.StatusBadRequest},
+		{"use-case range too long", "/dividends/calendar", nil, fmt.Errorf("x: %w", dividenddomain.ErrRangeTooLong), http.StatusBadRequest},
+		{"use-case range out of bounds", "/dividends/calendar", nil, fmt.Errorf("x: %w", dividenddomain.ErrRangeOutOfBounds), http.StatusBadRequest},
 		{"use-case error", "/dividends/calendar", nil, errors.New("upstream error"), http.StatusInternalServerError},
 		{"success", "/dividends/calendar", makeEntries(3), nil, http.StatusOK},
 	}
@@ -64,6 +67,24 @@ func TestGetCalendar(t *testing.T) {
 				t.Fatalf("expected %d, got %d", tc.wantCode, w.Code)
 			}
 		})
+	}
+}
+
+// TestGetCalendarRangeErrorMessage pins that a rejected range answers with the
+// sentinel's own text, not the wrapped error chain.
+func TestGetCalendarRangeErrorMessage(t *testing.T) {
+	uc := &mockDividendCalendarUC{err: fmt.Errorf("x: %w", dividenddomain.ErrRangeTooLong)}
+	w := httptest.NewRecorder()
+	newDividendRouter(uc).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/dividends/calendar", nil))
+
+	var body struct {
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.ErrorMessage != dividenddomain.ErrRangeTooLong.Error() {
+		t.Errorf("errorMessage: want %q, got %q", dividenddomain.ErrRangeTooLong.Error(), body.ErrorMessage)
 	}
 }
 

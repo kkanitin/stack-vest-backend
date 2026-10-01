@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Upcoming dividend payouts for the authenticated user's holdings (across all their portfolios). Each entry has an
-estimated payout of `shares × dividend`.
+Dividend payouts for the authenticated user's holdings (across all their portfolios) in a date range the caller
+chooses, past or upcoming. Each entry has an estimated payout of `shares × dividend`.
 
 ## Endpoints
 
@@ -12,12 +12,25 @@ estimated payout of `shares × dividend`.
 | GET    | `/api/v1/dividends/calendar`   | protected | `from`, `to` (YYYY-MM-DD, optional), `page`, `size`     |
 
 The response is a list envelope, paginated in memory and sorted by reference date, then symbol. The reference date
-is the payment date, or the ex-date when the payment date is unknown. `400` when `to < from` or a date is malformed.
+is the payment date, or the ex-date when the payment date is unknown.
+
+`from` and `to` are honored as sent, including past dates. Defaults: `from` is today (UTC), `to` is `from` + 75 days,
+capped at the latest allowed day so a lone `from` near the upper bound is still accepted. The range is inclusive on
+both ends.
+
+`400` when:
+
+- a date is malformed;
+- `to` is before `from` (also when only `to` is sent and it is before today);
+- the span `to − from` is more than 92 days (also when only `to` is sent and it is more than 92 days after today);
+- `from` is earlier than the first day of (current month − 13 months), or `to` is later than the last day of
+  (current month + 13 months).
 
 ## Code map
 
-- Domain: `internal/domain/dividend/dividend.go` (`Event`, `CalendarEntry`, `Fetcher`, `Cache`)
-- Use case: `internal/usecase/dividend/calendar.go` (`CalendarUseCase`)
+- Domain: `internal/domain/dividend/dividend.go` (`Event`, `CalendarEntry`, `Fetcher`, `Cache`, and the range errors
+  `ErrInvalidRange`, `ErrRangeTooLong`, `ErrRangeOutOfBounds`)
+- Use case: `internal/usecase/dividend/calendar.go` (`CalendarUseCase`, `resolveWindow`)
 - Repository: `internal/repository/dividend/redis.go` (`RedisCache`)
 - Infrastructure: FMP `GetDividendsCalendar(from, to)`
 - Handler: `internal/delivery/http/handler/dividend.go`
@@ -25,27 +38,60 @@ is the payment date, or the ex-date when the payment date is unknown. `400` when
 ## Data & dependencies
 
 - **Redis**, the only Redis consumer so far. Config: `redis.addr`, `redis.password`, `redis.db`.
-- FMP `/stable/dividends-calendar?from=&to=`: market-wide, forward-dated, 3-month maximum range.
+- FMP `/stable/dividends-calendar?from=&to=`: market-wide. It filters on the **ex-date** and serves past ranges as
+  well as forward-dated ones. One call returns at most 4000 rows (see [FMP row cap](#fmp-row-cap)).
   `/stable/dividends?symbol=` is history-only and **can't** be used for upcoming payouts.
 - Holdings come from `portfolio.Repository.ListPositionsByUser`.
 
 ## Caching design
 
-- Dividend schedules are market-wide reference data, so **one cached blob serves every user**. There is never a
+- Dividend schedules are market-wide reference data, so **the cached blobs serve every user**. There is never a
   per-user fetch.
-- The fetch window is fixed at `[today − 14d, today + 75d]`, about 89 days, which fits FMP's 3-month cap. The 14-day
-  lookback keeps dividends that have gone ex but haven't been paid yet.
-- Key: `dividend:v1:calendar:{from}:{to}`. The key is date-stamped, so it rotates daily. The `v1` prefix lets the
-  encoding change safely.
-- TTL is 24 h ±10% jitter (avoids a cache avalanche). An empty result is negative-cached for 1 h.
-- A `singleflight` in the use case coalesces concurrent cold-cache fetches into one upstream call.
+- There is **one blob per calendar month**. Key: `dividend:v1:calendar:YYYY-MM`. The `v1` prefix lets the encoding
+  change safely. A request reads the buckets of the months its range overlaps (at most five for a 92-day range), one
+  after the other, and keeps the events inside the range.
+- A bucket holds the events whose reference date falls in that month. To fill one, the use case fetches the ex-dates
+  in `[month start − 45d, month end]` and keeps the events that belong to the month. The 45-day lookback is needed
+  because FMP filters on the ex-date while the calendar places an event on its payment date, which is usually days to
+  weeks later. A fill covers 45 + 31 = 76 days of ex-dates at most.
+- TTL is 24 h ±10% jitter (avoids a cache avalanche). An empty month is negative-cached for 1 h. The key has no date
+  stamp, so a bucket is refreshed when its TTL runs out.
+- A `singleflight` in the use case, keyed per month, coalesces concurrent cold-cache fills of the same month into one.
+- A fill cannot be cancelled once started (the FMP client takes no context). If the request that started it is
+  abandoned, the result is still cached for the next caller, and the request stops before filling any further month.
 - **Redis is non-fatal:** if Redis is down at boot or at runtime, the use case logs a warning and fetches from FMP
-  directly. No other endpoint is affected.
+  directly. No other endpoint breaks, but every request then pays the full provider cost below (about 11 calls per
+  month in its range), against the FMP quota the other endpoints share.
+
+## FMP row cap
+
+`/stable/dividends-calendar` returns **at most 4000 rows per call**. When a range holds more, it silently drops the
+**earliest** ex-dates: a request for Aug 17 to Oct 31 came back as exactly 4000 rows starting at Sep 22. A single
+month already exceeds the cap. A normal week is about 750–2200 rows, the busiest measured week (December 2025) was
+3450, and a single peak day about 650.
+
+The FMP client absorbs this, so callers of `GetDividendsCalendar` can pass any range:
+
+- The range is split into contiguous 7-day tiles, fetched 4 at a time.
+- A tile that comes back with 4000 rows or more is discarded and fetched again as two halves, recursively, down to a
+  single day. If a single day still reaches the cap, the client logs a warning and keeps the rows it got.
+- FMP can list the same symbol more than once on the same ex-date. The rows are kept as they come, never deduplicated.
+
+Cost: each call takes about 1–6 s, scaling with its row count. Filling one cold month takes roughly 11 provider calls
+or more (76 days in 7-day tiles), and the months of a request are filled one after the other, so the default 75-day
+window costs three or four fills when nothing is cached. Browsing every month the API allows is about 27 buckets.
+The 4-at-a-time limit is per fill, so fills of different months running at once each get their own four. When one
+tile fails, tiles not yet started are skipped and the fill returns the error.
 
 ## Rules & gotchas
 
-- The display window is clamped to `[today, today + 75d]`. A `from`/`to` outside it returns the available subset,
-  not an error.
+- The range is not clamped. A range outside the limits is a `400`, not a trimmed result. Arbitrary ranges are bounded
+  to 13 months either side of the current month and to 92 days per request.
+- Past months are estimated with the user's **current** shares, not the shares held at the time.
+- A payout whose ex-date is more than 45 days before the start of its payment month is missed. So is one whose
+  payment date falls in the month before its ex-date's month, and one the provider lists with neither date.
+- An event that moves from one month to another (for example a changed payment date) can be stale for up to 24 h:
+  each month's bucket is cached on its own, so the event can show in both months or in neither until both refresh.
 - Shares are aggregated per symbol across portfolios.
 - MVP estimate limits: no ex-date eligibility check (for example, a position opened after the ex-date), and amounts
   are summed across currencies without conversion.
@@ -53,4 +99,6 @@ is the payment date, or the ex-date when the payment date is unknown. `400` when
 
 ## Tests
 
-`handler/dividend_test.go`, `usecase/dividend/calendar_test.go`
+`handler/dividend_test.go`, `usecase/dividend/calendar_test.go`, `usecase/dividend/calendar_internal_test.go`
+(window validation and month helpers), `infrastructure/fmp/client_test.go` (`TestGetDividendsCalendar_*`: parsing,
+tiling around the row cap, stopping after a failed tile)

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -31,11 +32,21 @@ func (h *DividendHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	d.GET("/calendar", h.getCalendar)
 }
 
-// getCalendar returns upcoming dividends for the authenticated user's holdings.
-// Optional `from`/`to` query params (YYYY-MM-DD) narrow the view, but only within
-// the fixed forward window the use case fetches (~today → +75 days): values outside
-// it are clamped, so a request beyond the window returns the available subset rather
-// than an error. Results are paginated via the standard `page`/`size` query params.
+// calendarRangeErrors are the use case's range-validation sentinels. Each maps to a
+// 400 whose text is the sentinel's own message.
+var calendarRangeErrors = []error{
+	dividenddomain.ErrInvalidRange,
+	dividenddomain.ErrRangeTooLong,
+	dividenddomain.ErrRangeOutOfBounds,
+}
+
+// getCalendar returns the dividends of the authenticated user's holdings whose
+// reference date falls in a date range. Optional `from`/`to` query params
+// (YYYY-MM-DD) are honored as sent, past dates included: `from` defaults to today
+// and `to` to `from` + 75 days. Nothing is clamped; a range the use case rejects is
+// a 400: `to` before `from`, a span over 92 days, or dates more than 13 months
+// before or after the current month. Results are paginated via the standard
+// `page`/`size` query params.
 func (h *DividendHandler) getCalendar(c *gin.Context) {
 	from, ok := parseQueryDate(c, "from")
 	if !ok {
@@ -46,7 +57,7 @@ func (h *DividendHandler) getCalendar(c *gin.Context) {
 		return
 	}
 	if !from.IsZero() && !to.IsZero() && to.Before(from) {
-		response.Err(c, http.StatusBadRequest, "to must not be before from")
+		response.Err(c, http.StatusBadRequest, dividenddomain.ErrInvalidRange.Error())
 		return
 	}
 
@@ -57,6 +68,12 @@ func (h *DividendHandler) getCalendar(c *gin.Context) {
 
 	email := c.GetString(middleware.EmailKey)
 	entries, err := h.calendarUC.Execute(c.Request.Context(), email, from, to)
+	for _, rangeErr := range calendarRangeErrors {
+		if errors.Is(err, rangeErr) {
+			response.Err(c, http.StatusBadRequest, rangeErr.Error())
+			return
+		}
+	}
 	if err != nil {
 		zap.L().Error("failed to build dividend calendar", logger.RequestID(c.Request.Context()), zap.String("email", email), zap.Error(err))
 		response.Err(c, http.StatusInternalServerError, "failed to build dividend calendar")

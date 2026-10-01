@@ -2,7 +2,16 @@ package dividend
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+// Range errors for a requested calendar window. Their messages are sent to the
+// client verbatim (the handler maps each to a 400), so they are worded for the caller.
+var (
+	ErrInvalidRange     = errors.New("to must not be before from")
+	ErrRangeTooLong     = errors.New("date range exceeds the maximum allowed (92 days)")
+	ErrRangeOutOfBounds = errors.New("date range must be within 13 months of the current month")
 )
 
 // Event is a single dividend record for a symbol, as published by the upstream
@@ -30,18 +39,19 @@ type CalendarEntry struct {
 }
 
 // Fetcher retrieves the market-wide dividend calendar for a date range from the
-// upstream provider (every symbol's upcoming dividends in [from, to]). The
-// per-symbol endpoint returns only history, so the calendar endpoint is the source
-// for forward-looking payouts. Implemented by *fmp.Client.
+// upstream provider: every symbol's dividends with an ex-date in [from, to], for
+// past and future ranges alike. The per-symbol endpoint returns only history, so the
+// calendar endpoint is the one source that also covers forward-looking payouts.
+// Implemented by *fmp.Client.
 type Fetcher interface {
 	GetDividendsCalendar(from, to time.Time) ([]Event, error)
 }
 
 // Cache is a shared, key-addressed cache of dividend events (Redis-backed in prod).
-// Because the calendar is market-wide reference data, a single cached blob (keyed by
-// the fetch window) serves every user. Get's second return value reports whether the
-// key was present — an empty, non-nil slice with found=true is a valid hit (negative
-// caching), distinct from a miss (found=false).
+// Because the calendar is market-wide reference data, the cached blobs (one per
+// calendar month, keyed by that month) serve every user. Get's second return value
+// reports whether the key was present — an empty, non-nil slice with found=true is a
+// valid hit (negative caching), distinct from a miss (found=false).
 type Cache interface {
 	Get(ctx context.Context, key string) ([]Event, bool, error)
 	Set(ctx context.Context, key string, events []Event) error

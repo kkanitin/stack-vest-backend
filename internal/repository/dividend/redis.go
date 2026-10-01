@@ -18,19 +18,20 @@ const keyPrefix = "dividend:v1:"
 
 // RedisCache is a shared dividend-calendar cache backed by Redis. It implements
 // dividenddomain.Cache. Because the dividend calendar is market-wide reference
-// data, a single cached blob (keyed by the fetch window) serves every user.
+// data, the cached blobs (one per calendar month, keyed by that month) serve every
+// user.
 //
 // Two stampede mitigations live here:
 //   - TTL jitter: each key's expiry is base ± jitterPct, so keys populated close
 //     together don't all expire at the same instant (cache avalanche).
 //   - Negative caching: an empty result is cached under a shorter TTL so an empty
-//     window doesn't re-hit the provider on every request.
+//     month doesn't re-hit the provider on every request.
 //
 // (Single-flight coalescing of concurrent misses on one hot key lives in the use
 // case, since it must wrap the provider call, not the cache.)
 type RedisCache struct {
 	client      *redis.Client
-	ttl         time.Duration // base TTL for a non-empty calendar window
+	ttl         time.Duration // base TTL for a non-empty calendar month
 	negativeTTL time.Duration // TTL for the empty-result case
 	jitterPct   float64       // fraction of ttl to randomise expiry by, e.g. 0.10
 }

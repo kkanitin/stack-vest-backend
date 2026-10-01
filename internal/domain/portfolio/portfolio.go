@@ -57,6 +57,10 @@ type Activity struct {
 	Tone      string    `json:"tone"`
 	Badge     string    `json:"badge"`
 	Timestamp time.Time `json:"timestamp"`
+	// PortfolioID and PortfolioName say which portfolio the row belongs to. They are set
+	// only on the cross-portfolio feed; the per-portfolio feed omits them.
+	PortfolioID   string `json:"portfolioId,omitempty"`
+	PortfolioName string `json:"portfolioName,omitempty"`
 }
 
 type Summary struct {
@@ -73,6 +77,53 @@ type PortfoliosSummary struct {
 	// DiversificationScore is 0–100, derived from holding-value concentration
 	// (HHI): a single holding scores 0, evenly spread holdings approach 100.
 	DiversificationScore int `json:"diversificationScore"`
+}
+
+// UserHolding is one position with its owner, as read for the cross-user value snapshot.
+type UserHolding struct {
+	UserID string
+	Symbol string
+	Shares float64
+}
+
+// ValuePoint is the total USD value of a user's holdings, across all portfolios, as
+// last recorded on one UTC calendar day.
+type ValuePoint struct {
+	Date  string  `json:"date"` // YYYY-MM-DD
+	Value float64 `json:"value"`
+}
+
+// ValueHistory is the recorded value series for a range, oldest first.
+type ValueHistory struct {
+	Range  HistoryRange  `json:"range"`
+	Points []*ValuePoint `json:"points"`
+}
+
+// HistoryRange selects how far back a value history reaches. The values match the
+// batch stock-history ranges so the frontend uses one vocabulary.
+type HistoryRange string
+
+const (
+	HistoryRange7D  HistoryRange = "7D"
+	HistoryRange30D HistoryRange = "30D"
+	HistoryRange90D HistoryRange = "90D"
+	HistoryRange1Y  HistoryRange = "1Y"
+	HistoryRangeAll HistoryRange = "All"
+)
+
+// Days is the look-back in days; bounded is false for HistoryRangeAll, which has no cutoff.
+func (r HistoryRange) Days() (days int, bounded bool) {
+	switch r {
+	case HistoryRange7D:
+		return 7, true
+	case HistoryRange30D:
+		return 30, true
+	case HistoryRange90D:
+		return 90, true
+	case HistoryRange1Y:
+		return 365, true
+	}
+	return 0, false
 }
 
 type Repository interface {
@@ -98,4 +149,17 @@ type Repository interface {
 	// with PortfolioID set so callers can group by portfolio.
 	ListPositionsByUser(ctx context.Context, userID string) ([]*Position, error)
 	GetActivity(ctx context.Context, portfolioID string, limit int) ([]*Activity, error)
+	// GetActivityByUser returns the newest activity across all of the user's portfolios,
+	// with PortfolioID and PortfolioName set on each row.
+	GetActivityByUser(ctx context.Context, userID string, limit int) ([]*Activity, error)
+
+	// Value snapshots (scoped to a user, across all of their portfolios)
+	// ListAllHoldings returns every position of every user, for the snapshot job.
+	ListAllHoldings(ctx context.Context) ([]*UserHolding, error)
+	// UpsertValueSnapshots records each user's total value for the given day, replacing
+	// any value already recorded for that user and day.
+	UpsertValueSnapshots(ctx context.Context, date time.Time, valueByUser map[string]float64) error
+	// GetValueHistory returns the user's recorded values, oldest first. A nil from
+	// means no lower bound.
+	GetValueHistory(ctx context.Context, userID string, from *time.Time) ([]*ValuePoint, error)
 }

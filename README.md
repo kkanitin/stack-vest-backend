@@ -15,7 +15,7 @@ external services stay confined to the outer layers.
 - **AI portfolio analysis** — streamed to the client over Server-Sent Events, backed by [Groq](https://groq.com)
 - **DCA simulator** — model dollar-cost-averaging outcomes over time
 - **Watchlist** — track symbols with configurable price alerts
-- **Dividend calendar** — upcoming ex-dividend/payment dates, cached in Redis
+- **Dividend calendar** — past and upcoming ex-dividend/payment dates, cached in Redis
 - **Stock data** — search, quotes, price changes, history, and company profiles via [FMP](https://financialmodelingprep.com)
 - **Market sentiment** and **popular stocks** endpoints
 - **Rate limiting** — token-bucket, keyed per-IP for public routes and per-user for authenticated ones

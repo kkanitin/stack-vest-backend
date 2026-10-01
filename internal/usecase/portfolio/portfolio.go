@@ -149,6 +149,22 @@ func (uc *UseCase) ListPositions(ctx context.Context, email, portfolioID string)
 	return positions, nil
 }
 
+// ListAllPositions returns every position across all of the user's portfolios, each
+// enriched with its live value. A symbol held in several portfolios appears once per
+// portfolio; callers that want one row per symbol merge them.
+func (uc *UseCase) ListAllPositions(ctx context.Context, email string) ([]*portfoliodomain.Position, error) {
+	user, err := uc.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("user lookup: %w", err)
+	}
+	positions, err := uc.repo.ListPositionsByUser(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	uc.enrichPositions(ctx, positions)
+	return positions, nil
+}
+
 func (uc *UseCase) GetSummary(ctx context.Context, email, portfolioID string) (*portfoliodomain.Summary, error) {
 	if _, err := uc.ownedPortfolio(ctx, email, portfolioID); err != nil {
 		return nil, err
@@ -222,6 +238,15 @@ func (uc *UseCase) GetActivity(ctx context.Context, email, portfolioID string, l
 		return nil, err
 	}
 	return uc.repo.GetActivity(ctx, portfolioID, limit)
+}
+
+// GetRecentActivity returns the newest activity across all of the user's portfolios.
+func (uc *UseCase) GetRecentActivity(ctx context.Context, email string, limit int) ([]*portfoliodomain.Activity, error) {
+	user, err := uc.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("user lookup: %w", err)
+	}
+	return uc.repo.GetActivityByUser(ctx, user.ID, limit)
 }
 
 // AnalysisHolding is a stored holding paired with its current market-value weight
