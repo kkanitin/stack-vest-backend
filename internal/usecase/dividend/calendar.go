@@ -15,14 +15,26 @@ import (
 	"github.com/kanitin/stackvest/backend/pkg/logger"
 )
 
-// fetchLookback / fetchForward define the market window fetched and cached. The
-// display filter keys on paymentDate, but FMP's calendar from/to may filter on
-// ex-date; the lookback captures dividends that have already gone ex but not yet
-// paid, so those imminent payouts are not dropped regardless of FMP's filter axis.
-// lookback+forward (= ~89 days) stays within the provider's 3-month range cap.
 const (
-	fetchLookback = 14 * 24 * time.Hour
-	fetchForward  = 75 * 24 * time.Hour
+	// defaultForward is how far past `from` the window reaches when the caller sends
+	// no `to`.
+	defaultForward = 75 * 24 * time.Hour
+
+	// bucketLookback is how far before a month's first day its fill starts fetching.
+	// The provider filters on ex-date, but the calendar places an event on its payment
+	// date, which usually falls days to weeks after the ex-date. Fetching ex-dates
+	// from 45 days before the month start to the month end (45 + 31 = 76 days at
+	// most) catches those payouts; one whose ex-date is more than 45 days before the
+	// month start is missed.
+	bucketLookback = 45 * 24 * time.Hour
+
+	// maxSpanDays caps `to − from` (a quarter, at its longest), so one request reads
+	// at most five month buckets.
+	maxSpanDays = 92
+
+	// boundMonths is how many months before and after the current month a window may
+	// reach. It bounds how many month buckets callers can make the cache fill.
+	boundMonths = 13
 )
 
 // userFinder resolves the authenticated email to a user (for the user id).
@@ -35,11 +47,13 @@ type positionLister interface {
 	ListPositionsByUser(ctx context.Context, userID string) ([]*portfoliodomain.Position, error)
 }
 
-// CalendarUseCase builds a user's upcoming-dividend calendar by fetching the
-// market-wide dividend calendar once (shared across all users via the cache) and
-// joining it against the user's holdings. The calendar is market-wide reference
-// data, so a single cached blob serves everyone; concurrent misses are coalesced
-// via singleflight so a cold cache triggers exactly one upstream call.
+// CalendarUseCase builds a user's dividend calendar for a date range by joining the
+// market-wide dividend calendar against the user's holdings. The calendar is
+// market-wide reference data, so it is cached once for everyone, in one blob per
+// calendar month: any requested range is assembled from the months it overlaps, so
+// users browsing different ranges share the same few keys instead of each range
+// caching its own copy. Concurrent misses on a month are coalesced via singleflight,
+// so a cold month triggers exactly one upstream fill.
 type CalendarUseCase struct {
 	users     userFinder
 	positions positionLister
@@ -64,22 +78,15 @@ func NewCalendarUseCase(
 
 // Execute returns the dividend calendar entries for the user's holdings whose
 // reference date (payment date, or ex-date when payment is unknown) falls within
-// [from, to]. The displayable window is fixed to roughly [today, today+75d]: a zero
-// from/to defaults to it, and a caller-supplied from/to is clamped into it (a
-// request outside this fixed forward window yields the available subset, not an
-// error — see the handler note).
+// [from, to], sorted by reference date then symbol. from/to are honored as given,
+// past dates included: a zero from defaults to today and a zero to defaults to
+// from + 75 days. A window resolveWindow rejects returns its sentinel error before
+// any I/O is done.
 func (uc *CalendarUseCase) Execute(ctx context.Context, email string, from, to time.Time) ([]dividenddomain.CalendarEntry, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	fetchFrom := today.Add(-fetchLookback)
-	fetchTo := today.Add(fetchForward)
-
-	// Display window: never show already-paid dividends (floor at today) and never
-	// claim data beyond what was fetched (ceil at fetchTo).
-	if from.IsZero() || from.Before(today) {
-		from = today
-	}
-	if to.IsZero() || to.After(fetchTo) {
-		to = fetchTo
+	from, to, err := resolveWindow(today, from, to)
+	if err != nil {
+		return nil, err
 	}
 
 	user, err := uc.users.FindByEmail(ctx, email)
@@ -101,33 +108,54 @@ func (uc *CalendarUseCase) Execute(ctx context.Context, email string, from, to t
 		return []dividenddomain.CalendarEntry{}, nil
 	}
 
-	events, err := uc.calendar(ctx, fetchFrom, fetchTo)
-	if err != nil {
-		return nil, err
-	}
-
 	entries := make([]dividenddomain.CalendarEntry, 0)
-	for _, ev := range events {
-		shares, held := sharesBySymbol[ev.Symbol]
-		if !held {
-			continue
+	for _, month := range monthsIn(from, to) {
+		// A fill cannot be cancelled once started, but an abandoned request must not
+		// go on to fill the rest of its window.
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		ref := referenceDate(ev)
-		if ref.Before(from) || ref.After(to) {
-			continue
+		events, err := uc.bucket(ctx, month)
+		if err != nil {
+			return nil, err
 		}
-		// MVP estimate: current total shares × per-share dividend. It does not check
-		// ex-date eligibility (a position opened after the ex-date wouldn't actually
-		// receive this dividend — Position.AddedAt could refine this later) and sums
-		// across currencies naively.
-		entries = append(entries, dividenddomain.CalendarEntry{
-			Event:           ev,
-			Shares:          shares,
-			EstimatedAmount: shares * ev.Dividend,
-		})
+
+		// Keep only the part of the window that lies in this month. A bucket should
+		// hold nothing else anyway, but clamping here is what guarantees an event is
+		// never emitted by two buckets.
+		lo, hi := month, monthEnd(month)
+		if from.After(lo) {
+			lo = from
+		}
+		if to.Before(hi) {
+			hi = to
+		}
+
+		for _, ev := range events {
+			shares, held := sharesBySymbol[ev.Symbol]
+			if !held {
+				continue
+			}
+			ref := referenceDate(ev)
+			if ref.Before(lo) || ref.After(hi) {
+				continue
+			}
+			// MVP estimate: current total shares × per-share dividend, for past months
+			// too (the shares held back then are not looked up). It does not check
+			// ex-date eligibility (a position opened after the ex-date wouldn't actually
+			// receive this dividend — Position.AddedAt could refine this later) and sums
+			// across currencies naively.
+			entries = append(entries, dividenddomain.CalendarEntry{
+				Event:           ev,
+				Shares:          shares,
+				EstimatedAmount: shares * ev.Dividend,
+			})
+		}
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
+	// Stable: a symbol can have several rows on one date, and their order must not
+	// shuffle between requests (it would move rows across page boundaries).
+	sort.SliceStable(entries, func(i, j int) bool {
 		ri, rj := referenceDate(entries[i].Event), referenceDate(entries[j].Event)
 		if ri.Equal(rj) {
 			return entries[i].Symbol < entries[j].Symbol
@@ -137,11 +165,78 @@ func (uc *CalendarUseCase) Execute(ctx context.Context, email string, from, to t
 	return entries, nil
 }
 
-// calendar returns the market-wide dividend calendar for [from, to], serving from
-// cache when present and otherwise filling from the provider. The fill is wrapped
-// in singleflight so concurrent misses collapse into one upstream call.
-func (uc *CalendarUseCase) calendar(ctx context.Context, from, to time.Time) ([]dividenddomain.Event, error) {
-	key := cacheKey(from, to)
+// resolveWindow applies the defaults to a requested window and validates it. A zero
+// from becomes today and a zero to becomes from + defaultForward, capped at the
+// latest allowed day so a default never pushes an in-bounds from out of bounds. It
+// returns ErrInvalidRange when to is before from (which can also arise from the
+// defaults: only a to, earlier than today), ErrRangeTooLong when the span exceeds
+// maxSpanDays, and ErrRangeOutOfBounds when the window reaches outside the months
+// from boundMonths before to boundMonths after today's month.
+func resolveWindow(today, from, to time.Time) (time.Time, time.Time, error) {
+	// Both bounds are derived from the first day of today's month. AddDate on a later
+	// day normalises an overflow into the following month (Oct 31 − 13 months is
+	// "Sep 31", i.e. Oct 1), which would shift the bounds on some days of the month.
+	thisMonth := monthStart(today)
+	earliest := thisMonth.AddDate(0, -boundMonths, 0)
+	latest := monthEnd(thisMonth.AddDate(0, boundMonths, 0))
+
+	if from.IsZero() {
+		from = today
+	}
+	if to.IsZero() {
+		to = from.Add(defaultForward)
+		if to.After(latest) && !from.After(latest) {
+			to = latest
+		}
+	}
+
+	if to.Before(from) {
+		return time.Time{}, time.Time{}, dividenddomain.ErrInvalidRange
+	}
+	if to.Sub(from) > maxSpanDays*24*time.Hour {
+		return time.Time{}, time.Time{}, dividenddomain.ErrRangeTooLong
+	}
+	if from.Before(earliest) || to.After(latest) {
+		return time.Time{}, time.Time{}, dividenddomain.ErrRangeOutOfBounds
+	}
+	return from, to, nil
+}
+
+// monthStart returns the first day of t's calendar month, at midnight UTC.
+func monthStart(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+// monthEnd returns the last day of the calendar month that starts on month (a
+// monthStart value).
+func monthEnd(month time.Time) time.Time {
+	return month.AddDate(0, 1, -1)
+}
+
+// monthsIn returns the first day of every calendar month overlapping [from, to], in
+// ascending order.
+func monthsIn(from, to time.Time) []time.Time {
+	var months []time.Time
+	for m := monthStart(from); !m.After(to); m = m.AddDate(0, 1, 0) {
+		months = append(months, m)
+	}
+	return months
+}
+
+// bucketKey identifies a month's cached bucket (the cache implementation adds its
+// own versioned prefix). The key carries no fetch date, so a bucket is refreshed by
+// its TTL rather than by rotating keys.
+func bucketKey(month time.Time) string {
+	return "calendar:" + month.Format("2006-01")
+}
+
+// bucket returns the market-wide dividend events whose reference date falls in the
+// calendar month starting on month, serving from cache when present and otherwise
+// filling from the provider. A fill fetches ex-dates in [month − bucketLookback,
+// month end] and keeps the events that belong to the month. It is wrapped in
+// singleflight so concurrent misses collapse into one upstream fill.
+func (uc *CalendarUseCase) bucket(ctx context.Context, month time.Time) ([]dividenddomain.Event, error) {
+	key := bucketKey(month)
 	if events, ok, err := uc.cache.Get(ctx, key); err != nil {
 		zap.L().Warn("dividend cache read failed", logger.RequestID(ctx), zap.String("key", key), zap.Error(err))
 	} else if ok {
@@ -149,11 +244,25 @@ func (uc *CalendarUseCase) calendar(ctx context.Context, from, to time.Time) ([]
 	}
 
 	v, err, _ := uc.sf.Do(key, func() (any, error) {
-		events, err := uc.fetcher.GetDividendsCalendar(from, to)
+		end := monthEnd(month)
+		fetched, err := uc.fetcher.GetDividendsCalendar(month.Add(-bucketLookback), end)
 		if err != nil {
 			return nil, err
 		}
-		if err := uc.cache.Set(ctx, key, events); err != nil {
+
+		// A new slice, never fetched[:0]: the fetched slice belongs to the fetcher.
+		// Non-nil even when empty, so an empty month is negative-cached as a hit.
+		events := make([]dividenddomain.Event, 0)
+		for _, ev := range fetched {
+			if ref := referenceDate(ev); !ref.Before(month) && !ref.After(end) {
+				events = append(events, ev)
+			}
+		}
+
+		// The fetch above cannot be cancelled, so by now the request that started it
+		// may be gone. Store the result anyway (detached from that request's
+		// cancellation) rather than throw the provider calls away.
+		if err := uc.cache.Set(context.WithoutCancel(ctx), key, events); err != nil {
 			zap.L().Warn("dividend cache write failed", logger.RequestID(ctx), zap.String("key", key), zap.Error(err))
 		}
 		return events, nil
@@ -162,12 +271,6 @@ func (uc *CalendarUseCase) calendar(ctx context.Context, from, to time.Time) ([]
 		return nil, err
 	}
 	return v.([]dividenddomain.Event), nil
-}
-
-// cacheKey identifies a fetched calendar window. Since the window is derived from
-// today, the date stamp rotates the key daily (a fresh fetch each day).
-func cacheKey(from, to time.Time) string {
-	return fmt.Sprintf("calendar:%s:%s", from.Format("2006-01-02"), to.Format("2006-01-02"))
 }
 
 // referenceDate is the date the calendar sorts and filters on: the payment date

@@ -40,8 +40,15 @@ type mockRepo struct {
 	listPortfolios      func(userID string) ([]*portfoliodomain.Portfolio, error)
 	listPositionsByUser func(userID string) ([]*portfoliodomain.Position, error)
 	listByPortfolioID   func(portfolioID string) ([]*portfoliodomain.Position, error)
+	listAllHoldings     func() ([]*portfoliodomain.UserHolding, error)
+	getValueHistory     func(userID string, from *time.Time) ([]*portfoliodomain.ValuePoint, error)
+	getActivityByUser   func(userID string, limit int) ([]*portfoliodomain.Activity, error)
 	createCalled        bool
 	addCalled           bool
+	// upsertCalls / upsertDate / upserted record what UpsertValueSnapshots was asked to write.
+	upsertCalls int
+	upsertDate  time.Time
+	upserted    map[string]float64
 }
 
 func (m *mockRepo) CreatePortfolio(
@@ -96,6 +103,30 @@ func (m *mockRepo) ListPositionsByUser(_ context.Context, userID string) ([]*por
 }
 func (m *mockRepo) GetActivity(_ context.Context, _ string, _ int) ([]*portfoliodomain.Activity, error) {
 	return nil, nil
+}
+func (m *mockRepo) GetActivityByUser(_ context.Context, userID string, limit int) ([]*portfoliodomain.Activity, error) {
+	if m.getActivityByUser != nil {
+		return m.getActivityByUser(userID, limit)
+	}
+	return nil, nil
+}
+func (m *mockRepo) ListAllHoldings(_ context.Context) ([]*portfoliodomain.UserHolding, error) {
+	if m.listAllHoldings != nil {
+		return m.listAllHoldings()
+	}
+	return nil, nil
+}
+func (m *mockRepo) UpsertValueSnapshots(_ context.Context, date time.Time, valueByUser map[string]float64) error {
+	m.upsertCalls++
+	m.upsertDate = date
+	m.upserted = valueByUser
+	return nil
+}
+func (m *mockRepo) GetValueHistory(_ context.Context, userID string, from *time.Time) ([]*portfoliodomain.ValuePoint, error) {
+	if m.getValueHistory != nil {
+		return m.getValueHistory(userID, from)
+	}
+	return []*portfoliodomain.ValuePoint{}, nil
 }
 
 var _ portfoliodomain.Repository = (*mockRepo)(nil)
@@ -362,6 +393,56 @@ func TestListPortfolios_EnrichesValueAndAssetCount(t *testing.T) {
 	}
 	if ps[1].Value == nil || *ps[1].Value != 0 || ps[1].AssetCount == nil || *ps[1].AssetCount != 0 {
 		t.Fatalf("pf2: expected empty (value 0 / assetCount 0), got %v / %v", ps[1].Value, ps[1].AssetCount)
+	}
+}
+
+func TestListAllPositions_EnrichesPositionsFromEveryPortfolio(t *testing.T) {
+	var gotUser string
+	repo := &mockRepo{listPositionsByUser: func(userID string) ([]*portfoliodomain.Position, error) {
+		gotUser = userID
+		return []*portfoliodomain.Position{
+			{PortfolioID: "pf1", Symbol: "AAPL", Shares: 2},
+			{PortfolioID: "pf2", Symbol: "AAPL", Shares: 3},
+			{PortfolioID: "pf2", Symbol: "MSFT", Shares: 1},
+		}, nil
+	}}
+	// MSFT has no quote: it stays in the list, unpriced, rather than being dropped.
+	q := selectiveQuoter{price: map[string]float64{"AAPL": 100}}
+	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, stubPriceChanger{})
+
+	ps, err := uc.ListAllPositions(context.Background(), "a@b.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotUser != "u1" {
+		t.Fatalf("expected positions for u1, got %q", gotUser)
+	}
+	if len(ps) != 3 {
+		t.Fatalf("expected one row per portfolio holding (3), got %d", len(ps))
+	}
+	if ps[0].ValueUsd != 200 || ps[1].ValueUsd != 300 || ps[2].ValueUsd != 0 {
+		t.Fatalf("expected values 200 / 300 / 0 (unpriced), got %v / %v / %v", ps[0].ValueUsd, ps[1].ValueUsd, ps[2].ValueUsd)
+	}
+}
+
+func TestGetRecentActivity_ScopesToTheAuthenticatedUser(t *testing.T) {
+	var gotUser string
+	var gotLimit int
+	repo := &mockRepo{getActivityByUser: func(userID string, limit int) ([]*portfoliodomain.Activity, error) {
+		gotUser, gotLimit = userID, limit
+		return []*portfoliodomain.Activity{{ID: "a1", PortfolioName: "Core"}}, nil
+	}}
+	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
+
+	acts, err := uc.GetRecentActivity(context.Background(), "a@b.com", 6)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotUser != "u1" || gotLimit != 6 {
+		t.Fatalf("expected activity for u1 with limit 6, got %q / %d", gotUser, gotLimit)
+	}
+	if len(acts) != 1 || acts[0].PortfolioName != "Core" {
+		t.Fatalf("expected the repository rows passed through, got %+v", acts)
 	}
 }
 

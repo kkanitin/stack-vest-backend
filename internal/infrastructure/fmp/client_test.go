@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +27,10 @@ func TestNewClient(t *testing.T) {
 
 	if client.baseURL != "https://financialmodelingprep.com/stable" {
 		t.Errorf("unexpected baseURL: %s", client.baseURL)
+	}
+
+	if client.calendarRowCap != 4000 {
+		t.Errorf("expected calendarRowCap 4000, got %d", client.calendarRowCap)
 	}
 }
 
@@ -113,6 +119,11 @@ func mustParseDate(s string) time.Time {
 // a silently empty dividend calendar (zero-valued fields), with all mock-based
 // use-case tests still green. The raw JSON is deliberately a literal, not a
 // struct-encoded fixture, so the test fails if the json tags stop matching FMP.
+//
+// The range is exactly one 7-day tile, so the client makes a single request and the
+// from/to it sends are the caller's. (The client literal leaves calendarRowCap zero:
+// if that did not fall back to the default, the 2-row response would count as capped
+// and be re-fetched in halves, returning more than 2 events.)
 func TestGetDividendsCalendar_Parsing(t *testing.T) {
 	// Sample shape taken from a live /stable/dividends-calendar response.
 	const body = `[
@@ -128,12 +139,12 @@ func TestGetDividendsCalendar_Parsing(t *testing.T) {
 	defer srv.Close()
 
 	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
-	events, err := client.GetDividendsCalendar(mustParseDate("2026-06-27"), mustParseDate("2026-09-25"))
+	events, err := client.GetDividendsCalendar(mustParseDate("2026-06-22"), mustParseDate("2026-06-28"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotFrom != "2026-06-27" || gotTo != "2026-09-25" {
-		t.Errorf("range params: want from=2026-06-27 to=2026-09-25, got from=%s to=%s", gotFrom, gotTo)
+	if gotFrom != "2026-06-22" || gotTo != "2026-06-28" {
+		t.Errorf("range params: want from=2026-06-22 to=2026-06-28, got from=%s to=%s", gotFrom, gotTo)
 	}
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(events))
@@ -175,6 +186,217 @@ func TestGetDividendsCalendar_EmptyIsNotError(t *testing.T) {
 	}
 	if len(events) != 0 {
 		t.Errorf("expected 0 events, got %d", len(events))
+	}
+}
+
+// calendarRequest is one request seen by fakeCalendar: the range asked for and how
+// many rows were sent back.
+type calendarRequest struct {
+	from, to string
+	rows     int
+}
+
+// fakeCalendar imitates /stable/dividends-calendar's row cap. It holds a fixed set of
+// rows and answers each request with at most rowCap of the rows whose ex-date is in
+// [from, to], keeping the LATEST ex-dates and silently dropping the earliest, like
+// the real endpoint. Requests arrive concurrently, so they are recorded under mu.
+type fakeCalendar struct {
+	rows   []fmpDividend // ascending by Date
+	rowCap int
+
+	mu   sync.Mutex
+	reqs []calendarRequest
+}
+
+func (f *fakeCalendar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	from, to := r.URL.Query().Get("from"), r.URL.Query().Get("to")
+	matched := []fmpDividend{}
+	for _, row := range f.rows {
+		if row.Date >= from && row.Date <= to {
+			matched = append(matched, row)
+		}
+	}
+	if len(matched) > f.rowCap {
+		matched = matched[len(matched)-f.rowCap:]
+	}
+
+	f.mu.Lock()
+	f.reqs = append(f.reqs, calendarRequest{from: from, to: to, rows: len(matched)})
+	f.mu.Unlock()
+
+	json.NewEncoder(w).Encode(matched)
+}
+
+// requests returns a copy of the requests recorded so far.
+func (f *fakeCalendar) requests() []calendarRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]calendarRequest(nil), f.reqs...)
+}
+
+// calendarRows returns n rows with the given ex-date and distinct symbols.
+func calendarRows(date string, n int) []fmpDividend {
+	rows := make([]fmpDividend, n)
+	for i := range rows {
+		rows[i] = fmpDividend{Symbol: fmt.Sprintf("%s-%d", date, i), Date: date, Dividend: 0.5}
+	}
+	return rows
+}
+
+// TestGetDividendsCalendar_TilesAroundRowCap drives the client against a capped
+// provider over 30 days that include one dense week. Whatever tiling and splitting
+// the client does, every row must come back exactly once, and the responses it kept
+// must cover the range with no gap and no overlap.
+func TestGetDividendsCalendar_TilesAroundRowCap(t *testing.T) {
+	const rowCap = 5
+
+	// Sparse days carry 1 row every other day (a 7-day tile stays under the cap);
+	// 2026-03-10..16 carry 4 rows each, so any range of two or more of those days
+	// hits the cap and has to be split down to single days.
+	var rows []fmpDividend
+	for d := 1; d <= 30; d++ {
+		date := fmt.Sprintf("2026-03-%02d", d)
+		switch {
+		case d >= 10 && d <= 16:
+			rows = append(rows, calendarRows(date, 4)...)
+		case d%2 == 1:
+			rows = append(rows, calendarRows(date, 1)...)
+		}
+	}
+	// FMP legitimately lists the same symbol twice on one ex-date; both rows must
+	// survive (no dedupe). 2026-03-20 is otherwise empty, so it stays under the cap.
+	twice := fmpDividend{Symbol: "TWICE", Date: "2026-03-20", Dividend: 0.1}
+	rows = append(rows, twice, twice)
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Date < rows[j].Date })
+
+	fake := &fakeCalendar{rows: rows, rowCap: rowCap}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL, calendarRowCap: rowCap}
+	events, err := client.GetDividendsCalendar(mustParseDate("2026-03-01"), mustParseDate("2026-03-30"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Every row exactly once, compared as a multiset (order is not part of the check).
+	want := make(map[string]int)
+	for _, r := range rows {
+		want[r.Symbol+"|"+r.Date]++
+	}
+	got := make(map[string]int)
+	for _, e := range events {
+		got[e.Symbol+"|"+e.ExDate.Format("2006-01-02")]++
+	}
+	if len(events) != len(rows) {
+		t.Errorf("expected %d events, got %d", len(rows), len(events))
+	}
+	for key, n := range want {
+		if got[key] != n {
+			t.Errorf("row %s: want %d, got %d", key, n, got[key])
+		}
+	}
+	for key, n := range got {
+		if want[key] == 0 {
+			t.Errorf("unexpected row %s (%d)", key, n)
+		}
+	}
+
+	// A response was used when it came back under the cap or covers a single day;
+	// a capped multi-day response is discarded and re-fetched in halves.
+	var used []calendarRequest
+	capped := 0
+	for _, req := range fake.requests() {
+		if req.rows < rowCap || req.from == req.to {
+			used = append(used, req)
+		} else {
+			capped++
+		}
+	}
+	if capped == 0 {
+		t.Fatal("fixture never hit the row cap, so splitting was not exercised")
+	}
+	if len(used) == 0 {
+		t.Fatal("no response was under the cap, so nothing can have been used")
+	}
+	sort.Slice(used, func(i, j int) bool { return used[i].from < used[j].from })
+	if used[0].from != "2026-03-01" {
+		t.Errorf("first used range starts at %s, want 2026-03-01", used[0].from)
+	}
+	if last := used[len(used)-1]; last.to != "2026-03-30" {
+		t.Errorf("last used range ends at %s, want 2026-03-30", last.to)
+	}
+	for i := 1; i < len(used); i++ {
+		next := mustParseDate(used[i-1].to).AddDate(0, 0, 1).Format("2006-01-02")
+		if used[i].from != next {
+			t.Errorf("used ranges not contiguous: [%s, %s] is followed by [%s, %s]",
+				used[i-1].from, used[i-1].to, used[i].from, used[i].to)
+		}
+	}
+}
+
+// TestGetDividendsCalendar_SingleDayOverCap covers the floor of the splitting: a
+// single day cannot be split further, so its capped rows are kept as they came and
+// the day is not fetched again.
+func TestGetDividendsCalendar_SingleDayOverCap(t *testing.T) {
+	const rowCap = 5
+	rows := append(calendarRows("2026-03-01", 8), calendarRows("2026-03-02", 1)...)
+
+	fake := &fakeCalendar{rows: rows, rowCap: rowCap}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL, calendarRowCap: rowCap}
+	events, err := client.GetDividendsCalendar(mustParseDate("2026-03-01"), mustParseDate("2026-03-02"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 5 capped rows for the dense day + 1 for the next day.
+	if len(events) != rowCap+1 {
+		t.Errorf("expected %d events, got %d", rowCap+1, len(events))
+	}
+	// The two-day tile (capped, discarded), then each day once.
+	if reqs := fake.requests(); len(reqs) != 3 {
+		t.Errorf("expected 3 requests, got %d: %+v", len(reqs), reqs)
+	}
+}
+
+// TestGetDividendsCalendar_TileErrorPropagates fails one of three tiles (a non-JSON
+// body) and expects the whole call to fail rather than return a partial calendar.
+func TestGetDividendsCalendar_TileErrorPropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("from") == "2026-03-08" {
+			w.Write([]byte("not json"))
+			return
+		}
+		w.Write([]byte(`[{"symbol":"KO","date":"2026-03-02","dividend":0.5}]`))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	events, err := client.GetDividendsCalendar(mustParseDate("2026-03-01"), mustParseDate("2026-03-21"))
+	if err == nil {
+		t.Fatalf("expected an error when a tile fails, got %d events", len(events))
+	}
+}
+
+// TestGetDividendsCalendar_FailureStopsRemainingTiles fails every request of a 13-tile
+// range: only the tiles already in flight (at most calendarConcurrency) may reach the
+// provider, the rest must not be started.
+func TestGetDividendsCalendar_FailureStopsRemainingTiles(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	if _, err := client.GetDividendsCalendar(mustParseDate("2026-06-27"), mustParseDate("2026-09-25")); err == nil {
+		t.Fatal("expected an error when every tile fails")
+	}
+	if got := requests.Load(); got > calendarConcurrency {
+		t.Errorf("expected at most %d requests after the first failure, got %d", calendarConcurrency, got)
 	}
 }
 

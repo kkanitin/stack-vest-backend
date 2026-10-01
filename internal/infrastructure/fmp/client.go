@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/kanitin/stackvest/backend/internal/domain/dca"
 	"github.com/kanitin/stackvest/backend/internal/domain/dividend"
@@ -25,13 +26,19 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	baseURL    string
+
+	// calendarRowCap is the row count at which a /dividends-calendar response is
+	// treated as truncated (see GetDividendsCalendar). Zero means
+	// defaultCalendarRowCap; tests lower it to exercise the splitting.
+	calendarRowCap int
 }
 
 func NewClient(apiKey string) *Client {
 	return &Client{
-		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: 20 * time.Second},
-		baseURL:    "https://financialmodelingprep.com/stable",
+		apiKey:         apiKey,
+		httpClient:     &http.Client{Timeout: 20 * time.Second},
+		baseURL:        "https://financialmodelingprep.com/stable",
+		calendarRowCap: defaultCalendarRowCap,
 	}
 }
 
@@ -533,11 +540,122 @@ func parseFMPDate(s string) time.Time {
 	return t
 }
 
-// GetDividendsCalendar returns the market-wide dividend calendar (every symbol's
-// dividends with an ex-date in [from, to]). FMP limits the range to 3 months; the
-// caller is responsible for staying within that. Unlike the per-symbol /dividends
-// endpoint (history only), this endpoint includes upcoming, forward-dated payouts.
+const (
+	// defaultCalendarRowCap is the most rows /dividends-calendar returns for one call.
+	// A response with this many rows has almost certainly been truncated.
+	defaultCalendarRowCap = 4000
+
+	// calendarTileDays is the span of one /dividends-calendar request. A normal week
+	// is ~750–2200 rows and the busiest measured one (December 2025) 3450, so a week
+	// normally fits under the cap in one call.
+	calendarTileDays = 7
+
+	// calendarConcurrency bounds simultaneous /dividends-calendar requests per
+	// GetDividendsCalendar call. Each takes ~1–6 s, scaling with its row count.
+	calendarConcurrency = 4
+)
+
+// GetDividendsCalendar returns the market-wide dividend calendar: every symbol's
+// dividends with an ex-date in [from, to], in ascending tile order (the order within
+// a tile is the provider's). The endpoint filters on ex-date, serves past ranges as
+// well as upcoming, forward-dated payouts (the per-symbol /dividends endpoint is
+// history only), and can list a symbol more than once on the same ex-date, so the
+// result is not deduplicated.
+//
+// One call returns at most 4000 rows, and when a range holds more the provider
+// silently drops the EARLIEST ex-dates (a request for Aug 17..Oct 31 came back as
+// exactly 4000 rows starting at Sep 22). A single month already exceeds the cap. So
+// the range is split into contiguous 7-day tiles that are fetched concurrently
+// (calendarConcurrency at a time), and a tile that still comes back at the cap is
+// re-fetched in halves (see fetchCalendarTile). The caller may pass any range; the
+// cost is one request per 7 days, plus the re-fetches of capped tiles.
 func (c *Client) GetDividendsCalendar(from, to time.Time) ([]dividend.Event, error) {
+	type tile struct{ from, to time.Time }
+	var tiles []tile
+	for start := from; !start.After(to); start = start.AddDate(0, 0, calendarTileDays) {
+		end := start.AddDate(0, 0, calendarTileDays-1)
+		if end.After(to) {
+			end = to
+		}
+		tiles = append(tiles, tile{from: start, to: end})
+	}
+
+	// Index-addressed so each goroutine writes only its own slot and the tiles are
+	// concatenated in date order whatever order they finish in.
+	results := make([][]dividend.Event, len(tiles))
+	// The group's context only signals the first failure: tiles not yet started are
+	// skipped instead of spending provider calls on a result that is already lost.
+	g, gctx := errgroup.WithContext(context.Background())
+	g.SetLimit(calendarConcurrency)
+	for i, tl := range tiles {
+		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
+			events, err := c.fetchCalendarTile(tl.from, tl.to)
+			if err != nil {
+				return err
+			}
+			results[i] = events
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	events := make([]dividend.Event, 0)
+	for _, r := range results {
+		events = append(events, r...)
+	}
+	return events, nil
+}
+
+// fetchCalendarTile returns every dividend with an ex-date in [from, to], working
+// around the provider's row cap. A response at the cap may have lost its earliest
+// ex-dates, so it is discarded and the range fetched again as two halves,
+// recursively, down to a single day. A single day at the cap cannot be split any
+// further: its rows are kept as they came and a warning is logged.
+//
+// The halves are fetched one after the other, in the calling goroutine, so a tile
+// never takes more than its one slot of calendarConcurrency.
+func (c *Client) fetchCalendarTile(from, to time.Time) ([]dividend.Event, error) {
+	events, err := c.fetchDividendsCalendar(from, to)
+	if err != nil {
+		return nil, err
+	}
+
+	rowCap := c.calendarRowCap
+	if rowCap <= 0 {
+		rowCap = defaultCalendarRowCap
+	}
+	if len(events) < rowCap {
+		return events, nil
+	}
+
+	extraDays := int(to.Sub(from) / (24 * time.Hour))
+	if extraDays <= 0 {
+		zap.L().Warn("fmp dividends calendar: a single day reached the row cap, some rows may be missing",
+			zap.String("date", from.Format("2006-01-02")), zap.Int("rows", len(events)), zap.Int("cap", rowCap))
+		return events, nil
+	}
+
+	mid := from.AddDate(0, 0, extraDays/2)
+	first, err := c.fetchCalendarTile(from, mid)
+	if err != nil {
+		return nil, err
+	}
+	second, err := c.fetchCalendarTile(mid.AddDate(0, 0, 1), to)
+	if err != nil {
+		return nil, err
+	}
+	return append(first, second...), nil
+}
+
+// fetchDividendsCalendar issues one /dividends-calendar request for [from, to] and
+// maps the rows as they come. It knows nothing about the row cap: callers go through
+// fetchCalendarTile.
+func (c *Client) fetchDividendsCalendar(from, to time.Time) ([]dividend.Event, error) {
 	params := url.Values{}
 	params.Set("from", from.Format("2006-01-02"))
 	params.Set("to", to.Format("2006-01-02"))

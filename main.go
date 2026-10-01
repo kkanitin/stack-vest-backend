@@ -35,6 +35,7 @@ import (
 	"github.com/kanitin/stackvest/backend/pkg/database"
 	"github.com/kanitin/stackvest/backend/pkg/logger"
 	"github.com/kanitin/stackvest/backend/pkg/migrate"
+	"github.com/kanitin/stackvest/backend/pkg/worker"
 )
 
 func main() {
@@ -124,6 +125,25 @@ func main() {
 	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, cachedQuoter, cachedPriceChanger, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioUC, analyzeUC)
 
+	// Records every user's total holdings value for the current UTC day: once at
+	// startup, then every three hours. Each run replaces the day's row, so a day settles
+	// on its last recorded value (see docs/features/portfolio.md). Three hours keeps the
+	// FMP cost low (one quote per distinct held symbol per run, whether or not anyone
+	// opens the app) while still guaranteeing a run after the US close: the last run of
+	// a UTC day falls after 21:00 UTC, and US markets close at 20:00 or 21:00 UTC.
+	const valueSnapshotInterval = 3 * time.Hour
+	valueSnapshotJob := worker.StartPeriodic(valueSnapshotInterval, func(ctx context.Context) {
+		written, skipped, err := portfolioUC.SnapshotValues(ctx, time.Now().UTC())
+		if errors.Is(err, context.Canceled) {
+			return // shutting down mid-run; nothing was written
+		}
+		if err != nil {
+			zap.L().Error("value snapshot failed", zap.Error(err))
+			return
+		}
+		zap.L().Info("value snapshot recorded", zap.Int("usersWritten", written), zap.Int("usersSkipped", skipped))
+	})
+
 	popularHandler := handler.NewPopularHandler(avClient)
 
 	sentimentUC := sentimentuc.NewUseCase(avClient, 6*time.Hour)
@@ -148,6 +168,9 @@ func main() {
 	}
 
 	runUntilShutdown(srv,
+		// Before pool.Close(): the job writes through the pool, so it must have
+		// stopped (or been abandoned at the deadline) before the pool goes away.
+		valueSnapshotJob.Stop,
 		func(_ context.Context) {
 			pool.Close()
 		},

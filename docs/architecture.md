@@ -28,11 +28,21 @@ pkg/
   migrate/              — Embedded SQL migrations
   logger/               — zap logger setup and helpers
   requestid/            — Per-request ID generation and context helpers
+  worker/               — Background jobs that run alongside the HTTP server
 ```
+
+## Background jobs
+
+`worker.StartPeriodic(interval, fn)` runs `fn` once at start and then on the interval, never overlapping, and passes
+it a context that is cancelled on shutdown. Jobs are started in `main.go` next to the use case they call. The only
+job today is the three-hourly value snapshot (see [features/portfolio.md](./features/portfolio.md#value-snapshots)).
+
+A job has no request, so it logs its own outcome in the `main.go` callback: one `Error` on failure, one `Info` on
+success.
 
 ## Graceful shutdown
 
-Every resource that holds a connection or runs a background process (e.g. Redis, message queue consumer, background worker) must register a cleanup func in the `runUntilShutdown` call in `main.go`. Each func receives a context with a 10-second deadline and is called in the order listed. Never leave a resource unregistered — unclean shutdowns cause connection leaks and data loss.
+Every resource that holds a connection or runs a background process (e.g. Redis, message queue consumer, background worker) must register a cleanup func in the `runUntilShutdown` call in `main.go`. Each func receives a context with a 10-second deadline and is called in the order listed, so a job's `Stop` must be listed before the resources it uses (the value snapshot job stops before `pool.Close()`). Never leave a resource unregistered — unclean shutdowns cause connection leaks and data loss.
 
 ## Adding a feature
 

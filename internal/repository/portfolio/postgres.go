@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -371,6 +372,111 @@ func (r *PostgresRepository) GetActivity(ctx context.Context, portfolioID string
 		activities = []*portfoliodomain.Activity{}
 	}
 	return activities, nil
+}
+
+func (r *PostgresRepository) GetActivityByUser(ctx context.Context, userID string, limit int) ([]*portfoliodomain.Activity, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT pa.id, COALESCE(pa.symbol, ''), pa.label, pa.detail, pa.tone, pa.badge, pa.occurred_at, p.id, p.name
+		 FROM stackvest.portfolio_activity pa
+		 JOIN stackvest.portfolios p ON p.id = pa.portfolio_id
+		 WHERE p.user_id = $1
+		 ORDER BY pa.occurred_at DESC
+		 LIMIT $2`,
+		userID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	activities := []*portfoliodomain.Activity{}
+	for rows.Next() {
+		var act portfoliodomain.Activity
+		if err := rows.Scan(
+			&act.ID, &act.Symbol, &act.Label, &act.Detail, &act.Tone, &act.Badge, &act.Timestamp,
+			&act.PortfolioID, &act.PortfolioName,
+		); err != nil {
+			return nil, err
+		}
+		activities = append(activities, &act)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return activities, nil
+}
+
+// --- Value snapshots ---
+
+func (r *PostgresRepository) ListAllHoldings(ctx context.Context) ([]*portfoliodomain.UserHolding, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT p.user_id, pp.symbol, pp.shares
+		 FROM stackvest.portfolio_positions pp
+		 JOIN stackvest.portfolios p ON p.id = pp.portfolio_id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	holdings := []*portfoliodomain.UserHolding{}
+	for rows.Next() {
+		var h portfoliodomain.UserHolding
+		if err := rows.Scan(&h.UserID, &h.Symbol, &h.Shares); err != nil {
+			return nil, err
+		}
+		holdings = append(holdings, &h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return holdings, nil
+}
+
+func (r *PostgresRepository) UpsertValueSnapshots(ctx context.Context, date time.Time, valueByUser map[string]float64) error {
+	if len(valueByUser) == 0 {
+		return nil
+	}
+	// A batch runs in one implicit transaction, so a day's snapshot is written for
+	// every user or for none.
+	batch := &pgx.Batch{}
+	for userID, value := range valueByUser {
+		batch.Queue(
+			`INSERT INTO stackvest.user_value_snapshots (user_id, snapshot_date, value_usd)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (user_id, snapshot_date)
+			 DO UPDATE SET value_usd = EXCLUDED.value_usd, updated_at = NOW()`,
+			userID, date, value,
+		)
+	}
+	return r.pool.SendBatch(ctx, batch).Close()
+}
+
+func (r *PostgresRepository) GetValueHistory(ctx context.Context, userID string, from *time.Time) ([]*portfoliodomain.ValuePoint, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT to_char(snapshot_date, 'YYYY-MM-DD'), value_usd
+		 FROM stackvest.user_value_snapshots
+		 WHERE user_id = $1 AND ($2::date IS NULL OR snapshot_date >= $2::date)
+		 ORDER BY snapshot_date`,
+		userID, from,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	points := []*portfoliodomain.ValuePoint{}
+	for rows.Next() {
+		var p portfoliodomain.ValuePoint
+		if err := rows.Scan(&p.Date, &p.Value); err != nil {
+			return nil, err
+		}
+		points = append(points, &p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return points, nil
 }
 
 var _ portfoliodomain.Repository = (*PostgresRepository)(nil)

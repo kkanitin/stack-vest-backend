@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/middleware"
@@ -20,6 +21,10 @@ type mockPortfolioRepo struct {
 	getPortfolio    func(id string) (*portfoliodomain.Portfolio, error)
 	createPortfolio func(userID, name, description string, maxPortfolios int) (*portfoliodomain.Portfolio, error)
 	addPosition     func(portfolioID, symbol, name string, shares, avgCost float64, maxPositions int) (*portfoliodomain.Position, error)
+	getValueHistory func(userID string, from *time.Time) ([]*portfoliodomain.ValuePoint, error)
+	// listPositionsByUser / getActivityByUser back the cross-portfolio endpoints.
+	listPositionsByUser func(userID string) ([]*portfoliodomain.Position, error)
+	getActivityByUser   func(userID string, limit int) ([]*portfoliodomain.Activity, error)
 }
 
 func (m *mockPortfolioRepo) CreatePortfolio(_ context.Context, userID, name, description string, maxPortfolios int) (*portfoliodomain.Portfolio, error) {
@@ -56,11 +61,32 @@ func (m *mockPortfolioRepo) Update(_ context.Context, _, _ string, _, _ *float64
 func (m *mockPortfolioRepo) ListByPortfolioID(_ context.Context, _ string) ([]*portfoliodomain.Position, error) {
 	return []*portfoliodomain.Position{}, nil
 }
-func (m *mockPortfolioRepo) ListPositionsByUser(_ context.Context, _ string) ([]*portfoliodomain.Position, error) {
+func (m *mockPortfolioRepo) ListPositionsByUser(_ context.Context, userID string) ([]*portfoliodomain.Position, error) {
+	if m.listPositionsByUser != nil {
+		return m.listPositionsByUser(userID)
+	}
 	return []*portfoliodomain.Position{}, nil
+}
+func (m *mockPortfolioRepo) GetActivityByUser(_ context.Context, userID string, limit int) ([]*portfoliodomain.Activity, error) {
+	if m.getActivityByUser != nil {
+		return m.getActivityByUser(userID, limit)
+	}
+	return []*portfoliodomain.Activity{}, nil
 }
 func (m *mockPortfolioRepo) GetActivity(_ context.Context, _ string, _ int) ([]*portfoliodomain.Activity, error) {
 	return []*portfoliodomain.Activity{}, nil
+}
+func (m *mockPortfolioRepo) ListAllHoldings(_ context.Context) ([]*portfoliodomain.UserHolding, error) {
+	return []*portfoliodomain.UserHolding{}, nil
+}
+func (m *mockPortfolioRepo) UpsertValueSnapshots(_ context.Context, _ time.Time, _ map[string]float64) error {
+	return nil
+}
+func (m *mockPortfolioRepo) GetValueHistory(_ context.Context, userID string, from *time.Time) ([]*portfoliodomain.ValuePoint, error) {
+	if m.getValueHistory != nil {
+		return m.getValueHistory(userID, from)
+	}
+	return []*portfoliodomain.ValuePoint{}, nil
 }
 
 const testUserID = "u1"
@@ -132,6 +158,110 @@ func TestGetPortfoliosSummaryHandler(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/portfolios/summary", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for summary, got %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestCrossPortfolioRoutes proves the static /positions and /activity routes are served
+// for the authenticated user and are not swallowed by /:id (which would 404 here, since
+// the mock knows no portfolio).
+func TestCrossPortfolioRoutes(t *testing.T) {
+	var gotLimit int
+	repo := &mockPortfolioRepo{
+		listPositionsByUser: func(userID string) ([]*portfoliodomain.Position, error) {
+			if userID != testUserID {
+				t.Fatalf("expected positions for %q, got %q", testUserID, userID)
+			}
+			return []*portfoliodomain.Position{}, nil
+		},
+		getActivityByUser: func(userID string, limit int) ([]*portfoliodomain.Activity, error) {
+			if userID != testUserID {
+				t.Fatalf("expected activity for %q, got %q", testUserID, userID)
+			}
+			gotLimit = limit
+			return []*portfoliodomain.Activity{{ID: "a1", Label: "Bought VOO", PortfolioID: "pf1", PortfolioName: "Core"}}, nil
+		},
+	}
+	tests := []struct {
+		name      string
+		url       string
+		wantCode  int
+		wantLimit int
+		wantBody  string
+	}{
+		{"all positions", "/portfolios/positions", http.StatusOK, 0, `"result":[]`},
+		{"activity defaults to 10", "/portfolios/activity", http.StatusOK, 10, `"portfolioName":"Core"`},
+		{"activity explicit limit", "/portfolios/activity?limit=6", http.StatusOK, 6, `"portfolioName":"Core"`},
+		{"activity limit too large 400", "/portfolios/activity?limit=51", http.StatusBadRequest, 0, ""},
+		{"activity limit not a number 400", "/portfolios/activity?limit=abc", http.StatusBadRequest, 0, ""},
+		{"activity negative limit 400", "/portfolios/activity?limit=-1", http.StatusBadRequest, 0, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotLimit = 0
+			r := newPortfolioRouter(repo)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
+
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d (body=%s)", tc.wantCode, w.Code, w.Body.String())
+			}
+			if gotLimit != tc.wantLimit {
+				t.Fatalf("expected limit %d passed to the repository, got %d", tc.wantLimit, gotLimit)
+			}
+			if tc.wantBody != "" && !strings.Contains(w.Body.String(), tc.wantBody) {
+				t.Fatalf("expected body to contain %s, got %s", tc.wantBody, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestGetValueHistoryHandler(t *testing.T) {
+	// Each case reports whether the repository was reached and with what lower bound, so
+	// the test also proves /history is not swallowed by the /:id route.
+	tests := []struct {
+		name      string
+		url       string
+		wantCode  int
+		wantRange string
+		wantBound bool
+	}{
+		{"defaults to 30D", "/portfolios/history", http.StatusOK, `"range":"30D"`, true},
+		{"explicit range", "/portfolios/history?range=1Y", http.StatusOK, `"range":"1Y"`, true},
+		{"All has no lower bound", "/portfolios/history?range=All", http.StatusOK, `"range":"All"`, false},
+		{"unknown range 400", "/portfolios/history?range=5Y", http.StatusBadRequest, "", false},
+		{"wrong case 400", "/portfolios/history?range=all", http.StatusBadRequest, "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var called, bounded bool
+			repo := &mockPortfolioRepo{getValueHistory: func(userID string, from *time.Time) ([]*portfoliodomain.ValuePoint, error) {
+				called, bounded = true, from != nil
+				if userID != testUserID {
+					t.Fatalf("expected history for %q, got %q", testUserID, userID)
+				}
+				return []*portfoliodomain.ValuePoint{{Date: "2026-09-30", Value: 1234.5}}, nil
+			}}
+			r := newPortfolioRouter(repo)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.url, nil))
+
+			if w.Code != tc.wantCode {
+				t.Fatalf("expected %d, got %d (body=%s)", tc.wantCode, w.Code, w.Body.String())
+			}
+			if tc.wantCode != http.StatusOK {
+				if called {
+					t.Fatal("repository must not be queried for an invalid range")
+				}
+				return
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, tc.wantRange) || !strings.Contains(body, `"date":"2026-09-30"`) || !strings.Contains(body, `"value":1234.5`) {
+				t.Fatalf("unexpected body: %s", body)
+			}
+			if !called || bounded != tc.wantBound {
+				t.Fatalf("expected repository called with bounded=%v, got called=%v bounded=%v", tc.wantBound, called, bounded)
+			}
+		})
 	}
 }
 
