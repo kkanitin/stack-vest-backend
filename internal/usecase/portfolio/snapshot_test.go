@@ -7,7 +7,9 @@ import (
 	"time"
 
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
+	stockdomain "github.com/kanitin/stackvest/backend/internal/domain/stock"
 	userdomain "github.com/kanitin/stackvest/backend/internal/domain/user"
+	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
 )
 
 var snapshotDay = time.Date(2026, 10, 1, 15, 30, 0, 0, time.UTC)
@@ -134,7 +136,7 @@ func TestGetValueHistory_BoundsTheRangeFromNow(t *testing.T) {
 	}}
 	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
 
-	h, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRange30D, snapshotDay)
+	h, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRange30D, "", snapshotDay)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,10 +163,128 @@ func TestGetValueHistory_AllHasNoLowerBound(t *testing.T) {
 	}}
 	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
 
-	if _, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRangeAll, snapshotDay); err != nil {
+	if _, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRangeAll, "", snapshotDay); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !called {
 		t.Fatal("expected the repository to be queried")
+	}
+}
+
+// stubHistory is a stockdomain.HistoryFetcher that records its calls.
+type stubHistory struct {
+	closes []stockdomain.HistoryPoint
+	err    error
+	calls  int
+	symbol string
+	from   time.Time
+	to     time.Time
+}
+
+func (s *stubHistory) GetHistoryClose(symbol string, from, to time.Time) ([]stockdomain.HistoryPoint, error) {
+	s.calls++
+	s.symbol, s.from, s.to = symbol, from, to
+	return s.closes, s.err
+}
+
+var testBenchmarks = []portfoliodomain.Benchmark{{Symbol: "SPY", Label: "S&P 500"}, {Symbol: "QQQ", Label: "Nasdaq 100"}}
+
+func benchmarkUC(points []*portfoliodomain.ValuePoint, fetcher stockdomain.HistoryFetcher) *portfoliouc.UseCase {
+	repo := &mockRepo{getValueHistory: func(string, *time.Time) ([]*portfoliodomain.ValuePoint, error) { return points, nil }}
+	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
+	return uc.WithBenchmarks(fetcher, testBenchmarks)
+}
+
+func twoPoints() []*portfoliodomain.ValuePoint {
+	return []*portfoliodomain.ValuePoint{{Date: "2026-09-12", Value: 10}, {Date: "2026-09-14", Value: 11}}
+}
+
+func TestGetValueHistory_BenchmarkAttachesAlignedCloses(t *testing.T) {
+	f := &stubHistory{closes: []stockdomain.HistoryPoint{{Date: "2026-09-11", Close: 540.5}, {Date: "2026-09-14", Close: 545}}}
+	uc := benchmarkUC(twoPoints(), f)
+
+	h, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRange30D, "SPY", snapshotDay)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := portfoliodomain.BenchmarkInfo{Symbol: "SPY", Label: "S&P 500", Available: true}
+	if h.Benchmark == nil || *h.Benchmark != want {
+		t.Fatalf("expected %+v, got %+v", want, h.Benchmark)
+	}
+	if *h.Points[0].BenchmarkClose != 540.5 || *h.Points[1].BenchmarkClose != 545 {
+		t.Fatalf("unexpected closes: %v %v", *h.Points[0].BenchmarkClose, *h.Points[1].BenchmarkClose)
+	}
+	if f.calls != 1 || f.symbol != "SPY" || !f.to.Equal(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)) || !f.from.Before(time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("unexpected fetch: calls=%d symbol=%s %v..%v", f.calls, f.symbol, f.from, f.to)
+	}
+}
+
+func TestGetValueHistory_BenchmarkUnavailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		fetcher stockdomain.HistoryFetcher
+	}{
+		{"fetch error", &stubHistory{err: errors.New("fmp down")}},
+		{"nil fetcher", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			uc := benchmarkUC(twoPoints(), tc.fetcher)
+			h, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRange30D, "SPY", snapshotDay)
+			if err != nil {
+				t.Fatalf("a benchmark outage must not fail the request, got %v", err)
+			}
+			if h.Benchmark == nil || h.Benchmark.Available || h.Benchmark.Symbol != "SPY" || h.Benchmark.Label != "S&P 500" {
+				t.Fatalf("expected unavailable SPY benchmark, got %+v", h.Benchmark)
+			}
+			for _, p := range h.Points {
+				if p.BenchmarkClose != nil {
+					t.Fatalf("expected no closes, got %v", *p.BenchmarkClose)
+				}
+			}
+		})
+	}
+}
+
+func TestGetValueHistory_BenchmarkSkipsFetchWithFewerThanTwoPoints(t *testing.T) {
+	for name, points := range map[string][]*portfoliodomain.ValuePoint{
+		"none": {},
+		"one":  {{Date: "2026-09-12", Value: 10}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &stubHistory{}
+			uc := benchmarkUC(points, f)
+			h, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRange30D, "QQQ", snapshotDay)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if f.calls != 0 {
+				t.Fatalf("expected the index provider not to be called, got %d calls", f.calls)
+			}
+			if h.Benchmark == nil || !h.Benchmark.Available || h.Benchmark.Symbol != "QQQ" {
+				t.Fatalf("expected available QQQ info, got %+v", h.Benchmark)
+			}
+		})
+	}
+}
+
+func TestGetValueHistory_NoBenchmarkLeavesResultUntouched(t *testing.T) {
+	f := &stubHistory{}
+	uc := benchmarkUC(twoPoints(), f)
+	h, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRange30D, "", snapshotDay)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if h.Benchmark != nil || f.calls != 0 || h.Points[0].BenchmarkClose != nil {
+		t.Fatalf("expected no benchmark data, got %+v calls=%d", h.Benchmark, f.calls)
+	}
+}
+
+func TestGetValueHistory_UnknownBenchmark(t *testing.T) {
+	uc := benchmarkUC(twoPoints(), &stubHistory{})
+	for _, sym := range []string{"AAPL", "spy"} {
+		if _, err := uc.GetValueHistory(context.Background(), "a@b.com", portfoliodomain.HistoryRange30D, sym, snapshotDay); !errors.Is(err, portfoliodomain.ErrUnknownBenchmark) {
+			t.Fatalf("%s: expected ErrUnknownBenchmark, got %v", sym, err)
+		}
 	}
 }

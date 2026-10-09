@@ -14,6 +14,7 @@ import (
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/router"
+	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
 	"github.com/kanitin/stackvest/backend/internal/infrastructure/cached"
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
 	groq "github.com/kanitin/stackvest/backend/internal/infrastructure/groq"
@@ -122,7 +123,11 @@ func main() {
 	analyzeUC := analysisuc.New(groqClient)
 
 	portfolioRepo := portfoliorepo.NewPostgresRepository(pool)
-	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, cachedQuoter, cachedPriceChanger, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio)
+	// Benchmark index closes: one cached 5-year fetch per symbol serves every range (see
+	// docs/features/portfolio.md). Closes only move once a day, so 6 hours is plenty fresh.
+	cachedHistory := cached.NewHistoryCloser(avClient, 6*time.Hour)
+	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, cachedQuoter, cachedPriceChanger, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio).
+		WithBenchmarks(cachedHistory, portfoliodomain.ParseBenchmarks(cfg.Portfolio.Benchmarks))
 	portfolioHandler := handler.NewPortfolioHandler(portfolioUC, analyzeUC)
 
 	// Records every user's total holdings value for the current UTC day: once at
@@ -150,7 +155,7 @@ func main() {
 	sentimentHandler := handler.NewSentimentHandler(sentimentUC)
 
 	dividendCache := dividendrepo.NewRedisCache(redisClient, 24*time.Hour, time.Hour)
-	dividendUC := dividenduc.NewCalendarUseCase(userRepo, portfolioRepo, avClient, dividendCache)
+	dividendUC := dividenduc.NewCalendarUseCase(userRepo, portfolioRepo, avClient, dividendCache).WithLedger(portfolioRepo)
 	dividendHandler := handler.NewDividendHandler(dividendUC)
 
 	healthHandler := handler.NewHealthHandler(pool)

@@ -474,3 +474,120 @@ func TestCalendar_NoHoldingsReturnsEmptyWithoutFetch(t *testing.T) {
 		t.Errorf("expected no fetch when user holds nothing, got %d", fetcher.calls)
 	}
 }
+
+type mockTxLister struct {
+	txs   []*portfoliodomain.Transaction
+	calls int
+}
+
+func (m *mockTxLister) ListTransactionsByUser(context.Context, string) ([]*portfoliodomain.Transaction, error) {
+	m.calls++
+	return m.txs, nil
+}
+
+func ledgerTx(sym, side string, qty float64, date time.Time) *portfoliodomain.Transaction {
+	return &portfoliodomain.Transaction{
+		Symbol: sym, Side: side, Quantity: qty, Price: 1, Date: date.Format(portfoliodomain.DateLayout),
+	}
+}
+
+// TestCalendar_PastEventUsesSharesHeldBeforeExDate: 10 shares held from day -60, 5 more
+// bought on the ex-date itself (not eligible), 4 sold the day before (eligible count 6).
+func TestCalendar_PastEventUsesSharesHeldBeforeExDate(t *testing.T) {
+	ex := inDays(-20)
+	fetcher := &mockFetcher{events: []dividenddomain.Event{
+		{Symbol: "KO", ExDate: ex, PaymentDate: inDays(-10), Dividend: 0.5},
+	}}
+	ledger := &mockTxLister{txs: []*portfoliodomain.Transaction{
+		ledgerTx("KO", "buy", 10, inDays(-60)),
+		ledgerTx("KO", "sell", 4, ex.AddDate(0, 0, -1)),
+		ledgerTx("KO", "buy", 5, ex),
+	}}
+	uc := dividenduc.NewCalendarUseCase(
+		&mockUserFinder{id: "u1"},
+		&mockPositionLister{positions: []*portfoliodomain.Position{{Symbol: "KO", Shares: 11}}},
+		fetcher, &mockCache{},
+	).WithLedger(ledger)
+
+	entries, err := uc.Execute(context.Background(), "a@b.com", inDays(-40), inDays(-5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(entries))
+	}
+	if entries[0].Shares != 6 || entries[0].EstimatedAmount != 3 {
+		t.Errorf("shares/amount = %v/%v, want 6/3", entries[0].Shares, entries[0].EstimatedAmount)
+	}
+	if ledger.calls != 1 {
+		t.Errorf("ledger loaded %d times, want once per request", ledger.calls)
+	}
+}
+
+// A position bought after the ex-date earns nothing; one fully sold earlier still
+// shows the dividend it was entitled to.
+func TestCalendar_PastEventEligibility(t *testing.T) {
+	fetcher := &mockFetcher{events: []dividenddomain.Event{
+		{Symbol: "NEW", ExDate: inDays(-20), PaymentDate: inDays(-10), Dividend: 1},
+		{Symbol: "OLD", ExDate: inDays(-20), PaymentDate: inDays(-10), Dividend: 1},
+	}}
+	ledger := &mockTxLister{txs: []*portfoliodomain.Transaction{
+		ledgerTx("NEW", "buy", 3, inDays(-15)),
+		ledgerTx("OLD", "buy", 2, inDays(-50)),
+		ledgerTx("OLD", "sell", 2, inDays(-12)),
+	}}
+	uc := dividenduc.NewCalendarUseCase(
+		&mockUserFinder{id: "u1"},
+		&mockPositionLister{positions: []*portfoliodomain.Position{{Symbol: "NEW", Shares: 3}}},
+		fetcher, &mockCache{},
+	).WithLedger(ledger)
+
+	entries, err := uc.Execute(context.Background(), "a@b.com", inDays(-40), inDays(-5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Symbol != "OLD" || entries[0].Shares != 2 {
+		t.Fatalf("want only OLD with 2 shares, got %+v", entries)
+	}
+}
+
+// Future events keep the current share count, whatever the ledger says about the past.
+func TestCalendar_FutureEventUsesCurrentShares(t *testing.T) {
+	cache := &mockCache{present: true, events: []dividenddomain.Event{
+		{Symbol: "KO", ExDate: inDays(5), PaymentDate: inDays(10), Dividend: 0.5},
+	}}
+	ledger := &mockTxLister{txs: []*portfoliodomain.Transaction{ledgerTx("KO", "buy", 1, inDays(-30))}}
+	uc := dividenduc.NewCalendarUseCase(
+		&mockUserFinder{id: "u1"},
+		&mockPositionLister{positions: []*portfoliodomain.Position{{Symbol: "KO", Shares: 8}}},
+		&mockFetcher{}, cache,
+	).WithLedger(ledger)
+
+	entries, err := uc.Execute(context.Background(), "a@b.com", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Shares != 8 || entries[0].EstimatedAmount != 4 {
+		t.Fatalf("want 8 shares / 4, got %+v", entries)
+	}
+}
+
+// A symbol the ledger knows nothing about falls back to the current share count.
+func TestCalendar_PastEventWithoutLedgerRowsFallsBackToCurrentShares(t *testing.T) {
+	fetcher := &mockFetcher{events: []dividenddomain.Event{
+		{Symbol: "KO", ExDate: inDays(-20), PaymentDate: inDays(-10), Dividend: 0.5},
+	}}
+	uc := dividenduc.NewCalendarUseCase(
+		&mockUserFinder{id: "u1"},
+		&mockPositionLister{positions: []*portfoliodomain.Position{{Symbol: "KO", Shares: 4}}},
+		fetcher, &mockCache{},
+	).WithLedger(&mockTxLister{})
+
+	entries, err := uc.Execute(context.Background(), "a@b.com", inDays(-40), inDays(-5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Shares != 4 {
+		t.Fatalf("want 4 shares, got %+v", entries)
+	}
+}

@@ -23,9 +23,19 @@ All config values can be overridden at runtime via environment variables. The na
 | `REDIS_ADDR`                            | `redis.addr`                            | —       |
 | `REDIS_PASSWORD`                        | `redis.password`                        | —       |
 | `REDIS_DB`                              | `redis.db`                              | `0`     |
+| `PORTFOLIO_MAX_PER_USER`                | `portfolio.max_per_user`                | `10`    |
+| `PORTFOLIO_MAX_POSITIONS_PER_PORTFOLIO` | `portfolio.max_positions_per_portfolio` | `20`    |
+| `PORTFOLIO_BENCHMARKS`                  | `portfolio.benchmarks`                  | `SPY=S&P 500`, `QQQ=Nasdaq 100`, `VT=Total world` |
 
 Env vars take precedence over `config.yaml`. In production, set secrets via env vars and omit them from `config.yaml`
 entirely. Feature-specific config keys (e.g. per-feature limits) are documented in the relevant feature doc.
+
+### List values
+
+A list key takes a comma-separated string in its env var. Items are **not** trimmed by the config loader, so
+consumers trim them (`portfolio.ParseBenchmarks` does). `portfolio.benchmarks` entries are `SYMBOL=Label` strings: the
+`=` separator is used because `SYMBOL: Label` would parse as a YAML map, and the env override only supports string
+lists. Labels cannot contain a comma when set through the env var. See [portfolio.md](./features/portfolio.md).
 
 ## Config file rules
 

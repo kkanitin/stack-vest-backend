@@ -11,7 +11,7 @@ external services stay confined to the outer layers.
 ## Features
 
 - **Google OAuth 2.0 login** with JWT-based session auth
-- **Portfolios** — full CRUD, positions, activity log, and computed value/return summaries
+- **Portfolios** — full CRUD, a buy/sell transaction ledger with derived positions, realised/unrealised P&L, activity log, and time-weighted return summaries
 - **AI portfolio analysis** — streamed to the client over Server-Sent Events, backed by [Groq](https://groq.com)
 - **DCA simulator** — model dollar-cost-averaging outcomes over time
 - **Watchlist** — track symbols with configurable price alerts
@@ -94,10 +94,14 @@ open; everything else requires a valid JWT (`Authorization: Bearer <token>`).
 | DELETE | `/api/v1/portfolios/:id`                      | JWT     | Delete a portfolio                           |
 | GET    | `/api/v1/portfolios/:id/summary`              | JWT     | Value/return summary                         |
 | GET    | `/api/v1/portfolios/:id/activity`             | JWT     | Activity log                                 |
-| POST   | `/api/v1/portfolios/:id/positions`            | JWT     | Add a position                               |
-| GET    | `/api/v1/portfolios/:id/positions`            | JWT     | List positions                               |
-| PATCH  | `/api/v1/portfolios/:id/positions/:symbol`    | JWT     | Update a position                            |
-| DELETE | `/api/v1/portfolios/:id/positions/:symbol`    | JWT     | Remove a position                            |
+| POST   | `/api/v1/portfolios/:id/positions`            | JWT     | Add a holding (records a buy dated today)    |
+| GET    | `/api/v1/portfolios/:id/positions`            | JWT     | List positions (`includeClosed` optional)    |
+| PATCH  | `/api/v1/portfolios/:id/positions/:symbol`    | JWT     | Gone (`410`); edit via transactions          |
+| DELETE | `/api/v1/portfolios/:id/positions/:symbol`    | JWT     | Remove a position and its transactions       |
+| GET    | `/api/v1/portfolios/:id/transactions`         | JWT     | List transactions                            |
+| POST   | `/api/v1/portfolios/:id/transactions`         | JWT     | Record a buy or sell                         |
+| PATCH  | `/api/v1/portfolios/:id/transactions/:txId`   | JWT     | Edit a transaction                           |
+| DELETE | `/api/v1/portfolios/:id/transactions/:txId`   | JWT     | Delete a transaction                         |
 | POST   | `/api/v1/portfolios/:id/analyze`              | JWT     | AI analysis for one portfolio                |
 
 Responses use a standard envelope (`result`/`results` + `code`/`message`/`errorMessage`, plus `meta`

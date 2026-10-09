@@ -47,6 +47,11 @@ type positionLister interface {
 	ListPositionsByUser(ctx context.Context, userID string) ([]*portfoliodomain.Position, error)
 }
 
+// transactionLister returns every ledger transaction across a user's portfolios.
+type transactionLister interface {
+	ListTransactionsByUser(ctx context.Context, userID string) ([]*portfoliodomain.Transaction, error)
+}
+
 // CalendarUseCase builds a user's dividend calendar for a date range by joining the
 // market-wide dividend calendar against the user's holdings. The calendar is
 // market-wide reference data, so it is cached once for everyone, in one blob per
@@ -59,7 +64,17 @@ type CalendarUseCase struct {
 	positions positionLister
 	fetcher   dividenddomain.Fetcher
 	cache     dividenddomain.Cache
+	ledger    transactionLister // optional; see WithLedger
 	sf        singleflight.Group
+}
+
+// WithLedger makes past events use the shares held at the end of the day before the
+// ex-date, read from the transaction ledger (loaded once per request). Without it every
+// event uses the current share count. It is a setter so the constructor's callers stay
+// unchanged; call it once at wiring time.
+func (uc *CalendarUseCase) WithLedger(l transactionLister) *CalendarUseCase {
+	uc.ledger = l
+	return uc
 }
 
 func NewCalendarUseCase(
@@ -104,7 +119,11 @@ func (uc *CalendarUseCase) Execute(ctx context.Context, email string, from, to t
 	for _, pos := range positions {
 		sharesBySymbol[pos.Symbol] += pos.Shares
 	}
-	if len(sharesBySymbol) == 0 {
+	held, err := uc.loadHeldShares(ctx, user.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(sharesBySymbol) == 0 && held.empty() {
 		return []dividenddomain.CalendarEntry{}, nil
 	}
 
@@ -132,19 +151,23 @@ func (uc *CalendarUseCase) Execute(ctx context.Context, email string, from, to t
 		}
 
 		for _, ev := range events {
-			shares, held := sharesBySymbol[ev.Symbol]
-			if !held {
-				continue
-			}
 			ref := referenceDate(ev)
 			if ref.Before(lo) || ref.After(hi) {
 				continue
 			}
-			// MVP estimate: current total shares × per-share dividend, for past months
-			// too (the shares held back then are not looked up). It does not check
-			// ex-date eligibility (a position opened after the ex-date wouldn't actually
-			// receive this dividend — Position.AddedAt could refine this later) and sums
-			// across currencies naively.
+			// Future events (ex-date after today) use the current total shares; past ones
+			// use the shares held at the end of the day before the ex-date, so a position
+			// opened after the ex-date earns nothing and one sold since still counts.
+			// Amounts are an estimate and sum across currencies naively.
+			shares := sharesBySymbol[ev.Symbol]
+			if exDate := exDateOf(ev); !exDate.After(today) {
+				if h, ok := held.sharesBefore(ev.Symbol, exDate); ok {
+					shares = h
+				}
+			}
+			if shares <= 0 {
+				continue
+			}
 			entries = append(entries, dividenddomain.CalendarEntry{
 				Event:           ev,
 				Shares:          shares,
@@ -163,6 +186,60 @@ func (uc *CalendarUseCase) Execute(ctx context.Context, email string, from, to t
 		return ri.Before(rj)
 	})
 	return entries, nil
+}
+
+// exDateOf is the event's ex-dividend date, or its reference date when the ex-date is
+// unknown.
+func exDateOf(ev dividenddomain.Event) time.Time {
+	if !ev.ExDate.IsZero() {
+		return ev.ExDate
+	}
+	return referenceDate(ev)
+}
+
+// ledgerShares answers "how many shares of a symbol did the user hold at the end of the
+// day before a date", summed over all portfolios, from one load of the ledger.
+type ledgerShares struct {
+	bySymbol map[string][]*portfoliodomain.Transaction
+}
+
+func (l ledgerShares) empty() bool { return len(l.bySymbol) == 0 }
+
+// sharesBefore returns the shares held at the end of the day before date. ok is false
+// when the ledger has no transactions for the symbol.
+func (l ledgerShares) sharesBefore(symbol string, date time.Time) (float64, bool) {
+	txs, ok := l.bySymbol[symbol]
+	if !ok {
+		return 0, false
+	}
+	cutoff := date.UTC().Format(portfoliodomain.DateLayout)
+	var shares float64
+	for _, t := range txs {
+		if t.Date >= cutoff {
+			continue
+		}
+		if t.Side == portfoliodomain.SideSell {
+			shares -= t.Quantity
+		} else {
+			shares += t.Quantity
+		}
+	}
+	return portfoliodomain.Round8(shares), true
+}
+
+func (uc *CalendarUseCase) loadHeldShares(ctx context.Context, userID string) (ledgerShares, error) {
+	out := ledgerShares{bySymbol: map[string][]*portfoliodomain.Transaction{}}
+	if uc.ledger == nil {
+		return out, nil
+	}
+	txs, err := uc.ledger.ListTransactionsByUser(ctx, userID)
+	if err != nil {
+		return out, fmt.Errorf("list transactions: %w", err)
+	}
+	for _, t := range txs {
+		out.bySymbol[t.Symbol] = append(out.bySymbol[t.Symbol], t)
+	}
+	return out, nil
 }
 
 // resolveWindow applies the defaults to a requested window and validates it. A zero

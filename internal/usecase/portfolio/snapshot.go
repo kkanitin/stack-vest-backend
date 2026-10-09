@@ -61,7 +61,22 @@ func (uc *UseCase) SnapshotValues(ctx context.Context, day time.Time) (written, 
 
 // GetValueHistory returns the user's recorded daily values for the range, oldest first.
 // now anchors the look-back; a bounded range starts at 00:00 UTC that many days before it.
-func (uc *UseCase) GetValueHistory(ctx context.Context, email string, r portfoliodomain.HistoryRange, now time.Time) (*portfoliodomain.ValueHistory, error) {
+//
+// A non-empty benchmark (a configured symbol, else ErrUnknownBenchmark) attaches that
+// index's closes to the points; see attachBenchmark for the failure behaviour. Unset, the
+// result carries no benchmark data.
+//
+// Each point also gets ReturnPct, the cumulative time-weighted return from the first
+// point (see attachReturns); the value itself still comes from the snapshots.
+func (uc *UseCase) GetValueHistory(ctx context.Context, email string, r portfoliodomain.HistoryRange, benchmark string, now time.Time) (*portfoliodomain.ValueHistory, error) {
+	var bench *portfoliodomain.Benchmark
+	if benchmark != "" {
+		bench = uc.findBenchmark(benchmark)
+		if bench == nil {
+			return nil, portfoliodomain.ErrUnknownBenchmark
+		}
+	}
+
 	user, err := uc.userRepo.FindByEmail(ctx, email)
 	if err != nil {
 		return nil, fmt.Errorf("user lookup: %w", err)
@@ -78,7 +93,12 @@ func (uc *UseCase) GetValueHistory(ctx context.Context, email string, r portfoli
 	if err != nil {
 		return nil, err
 	}
-	return &portfoliodomain.ValueHistory{Range: r, Points: points}, nil
+	uc.attachReturns(ctx, user.ID, points, now)
+	h := &portfoliodomain.ValueHistory{Range: r, Points: points}
+	if bench != nil {
+		h.Benchmark = uc.attachBenchmark(ctx, *bench, points)
+	}
+	return h, nil
 }
 
 // fetchQuotePrices concurrently fetches the current price of each symbol, bounded by

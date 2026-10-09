@@ -37,6 +37,7 @@ func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	pf.GET("", h.listPortfolios)
 	pf.GET("/summary", h.getPortfoliosSummary)
 	pf.GET("/history", h.getValueHistory)
+	pf.GET("/benchmarks", h.listBenchmarks)
 	pf.GET("/positions", h.listAllPositions)
 	pf.GET("/activity", h.getRecentActivity)
 	pf.POST("/analyze", h.analyze)
@@ -47,6 +48,10 @@ func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	pf.GET("/:id/positions", h.listPositions)
 	pf.PATCH("/:id/positions/:symbol", h.updatePosition)
 	pf.DELETE("/:id/positions/:symbol", h.removePosition)
+	pf.GET("/:id/transactions", h.listTransactions)
+	pf.POST("/:id/transactions", h.createTransaction)
+	pf.PATCH("/:id/transactions/:txId", h.updateTransaction)
+	pf.DELETE("/:id/transactions/:txId", h.deleteTransaction)
 	pf.GET("/:id/summary", h.getSummary)
 	pf.GET("/:id/activity", h.getActivity)
 	pf.POST("/:id/analyze", h.analyzePortfolio)
@@ -117,6 +122,12 @@ func (h *PortfolioHandler) getPortfoliosSummary(c *gin.Context) {
 
 type valueHistoryQuery struct {
 	Range string `form:"range" binding:"omitempty,oneof=7D 30D 90D 1Y All"`
+	// Benchmark is validated by hand against the configured list (it is not a fixed enum).
+	Benchmark string `form:"benchmark"`
+}
+
+func (h *PortfolioHandler) listBenchmarks(c *gin.Context) {
+	response.OK(c, h.uc.Benchmarks())
 }
 
 func (h *PortfolioHandler) getValueHistory(c *gin.Context) {
@@ -130,8 +141,17 @@ func (h *PortfolioHandler) getValueHistory(c *gin.Context) {
 		r = portfoliodomain.HistoryRange30D
 	}
 
+	if q.Benchmark != "" && !h.knownBenchmark(q.Benchmark) {
+		symbols := make([]string, 0)
+		for _, b := range h.uc.Benchmarks() {
+			symbols = append(symbols, b.Symbol)
+		}
+		response.Err(c, http.StatusBadRequest, "benchmark must be one of: "+strings.Join(symbols, ", "))
+		return
+	}
+
 	email := c.GetString(middleware.EmailKey)
-	history, err := h.uc.GetValueHistory(c.Request.Context(), email, r, time.Now())
+	history, err := h.uc.GetValueHistory(c.Request.Context(), email, r, q.Benchmark, time.Now())
 	if err != nil {
 		zap.L().Error(
 			"failed to load value history", logger.RequestID(c.Request.Context()), zap.String("email", email),
@@ -141,6 +161,16 @@ func (h *PortfolioHandler) getValueHistory(c *gin.Context) {
 		return
 	}
 	response.OK(c, history)
+}
+
+// knownBenchmark reports whether symbol is a configured benchmark (case-sensitive).
+func (h *PortfolioHandler) knownBenchmark(symbol string) bool {
+	for _, b := range h.uc.Benchmarks() {
+		if b.Symbol == symbol {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *PortfolioHandler) listAllPositions(c *gin.Context) {
@@ -293,77 +323,39 @@ func (h *PortfolioHandler) addPosition(c *gin.Context) {
 
 	email := c.GetString(middleware.EmailKey)
 	pos, err := h.uc.AddPosition(c.Request.Context(), email, id, req.Symbol, req.Name, *req.Shares, *req.AvgCost)
-	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
-		response.Err(c, http.StatusNotFound, "portfolio not found")
-		return
-	}
-	if errors.Is(err, portfoliodomain.ErrPositionLimitReached) {
-		response.Err(c, http.StatusConflict, "position limit reached")
-		return
-	}
 	if errors.Is(err, portfoliodomain.ErrAlreadyExists) {
 		response.Err(c, http.StatusConflict, fmt.Sprintf("position already exists: %s", req.Symbol))
 		return
 	}
 	if err != nil {
-		zap.L().Error(
-			"failed to add position",
-			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id),
-			zap.String("symbol", req.Symbol), zap.Error(err),
-		)
-		response.Err(c, http.StatusInternalServerError, "failed to add position")
+		// Portfolio not found, position limit, 400 validation (invalid transaction, future
+		// date) and the 500 fallback share the ledger endpoints' mapping.
+		h.transactionError(c, err, "add position", zap.String("symbol", req.Symbol))
 		return
 	}
 	response.Created(c, pos)
 }
 
-type updatePositionRequest struct {
-	Shares  *float64 `json:"shares"`
-	AvgCost *float64 `json:"avgCost"`
-}
-
+// updatePosition is gone: a holding is no longer edited directly, only through its
+// transactions (see portfolio_transactions.go). The route stays for a release so a stale
+// client gets a clear 410 instead of a 404.
 func (h *PortfolioHandler) updatePosition(c *gin.Context) {
 	id := c.Param("id")
-	symbol := c.Param("symbol")
-
-	var req updatePositionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Err(c, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.Shares == nil && req.AvgCost == nil {
-		response.Err(c, http.StatusBadRequest, "at least one of shares or avgCost is required")
-		return
-	}
-	if req.Shares != nil && *req.Shares <= 0 {
-		response.Err(c, http.StatusBadRequest, "shares must be greater than 0")
-		return
-	}
-	if req.AvgCost != nil && *req.AvgCost < 0 {
-		response.Err(c, http.StatusBadRequest, "avgCost must not be negative")
-		return
-	}
-
 	email := c.GetString(middleware.EmailKey)
-	pos, err := h.uc.UpdatePosition(c.Request.Context(), email, id, symbol, req.Shares, req.AvgCost)
+	_, err := h.uc.UpdatePosition(c.Request.Context(), email, id, c.Param("symbol"))
 	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
 		response.Err(c, http.StatusNotFound, "portfolio not found")
 		return
 	}
-	if errors.Is(err, portfoliodomain.ErrNotFound) {
-		response.Err(c, http.StatusNotFound, fmt.Sprintf("position not found: %s", symbol))
+	if errors.Is(err, portfoliouc.ErrHoldingEditGone) {
+		response.Err(c, http.StatusGone, err.Error())
 		return
 	}
-	if err != nil {
-		zap.L().Error(
-			"failed to update position",
-			logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id),
-			zap.String("symbol", symbol), zap.Error(err),
-		)
-		response.Err(c, http.StatusInternalServerError, "failed to update position")
-		return
-	}
-	response.OK(c, pos)
+	zap.L().Error(
+		"unexpected update position result",
+		logger.RequestID(c.Request.Context()), zap.String("email", email), zap.String("id", id), zap.Error(err),
+	)
+	response.Err(c, http.StatusInternalServerError, "failed to update position")
 }
 
 func (h *PortfolioHandler) removePosition(c *gin.Context) {
@@ -392,10 +384,19 @@ func (h *PortfolioHandler) removePosition(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+type listPositionsQuery struct {
+	IncludeClosed bool `form:"includeClosed"`
+}
+
 func (h *PortfolioHandler) listPositions(c *gin.Context) {
 	id := c.Param("id")
+	var q listPositionsQuery
+	if err := c.ShouldBindQuery(&q); err != nil {
+		response.Err(c, http.StatusBadRequest, "includeClosed must be true or false")
+		return
+	}
 	email := c.GetString(middleware.EmailKey)
-	positions, err := h.uc.ListPositions(c.Request.Context(), email, id)
+	positions, err := h.uc.ListPositions(c.Request.Context(), email, id, q.IncludeClosed)
 	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
 		response.Err(c, http.StatusNotFound, "portfolio not found")
 		return

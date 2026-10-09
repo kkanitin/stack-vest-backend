@@ -42,3 +42,10 @@ cors:
 portfolio:
   max_per_user: 10                  # max portfolios a single user can own
   max_positions_per_portfolio: 20   # max positions within one portfolio
+  # Indices a portfolio value history can be compared with (GET /portfolios/benchmarks).
+  # Each entry is "SYMBOL=Label" ('=' because a "SYMBOL: Label" entry would parse as a YAML map).
+  # Env var PORTFOLIO_BENCHMARKS takes a comma-separated list; entries are trimmed.
+  benchmarks:
+    - "SPY=S&P 500"
+    - "QQQ=Nasdaq 100"
+    - "VT=Total world"

@@ -57,6 +57,9 @@ type Config struct {
 	Portfolio struct {
 		MaxPerUser               int `yaml:"max_per_user"`
 		MaxPositionsPerPortfolio int `yaml:"max_positions_per_portfolio"`
+		// Benchmarks are the indices a value history can be compared with, as
+		// "SYMBOL=Label" entries (parsed by portfolio.ParseBenchmarks).
+		Benchmarks []string `yaml:"benchmarks"`
 	} `yaml:"portfolio"`
 }
 
@@ -75,6 +78,7 @@ func Load() *Config {
 	cfg.Redis.Addr = "localhost:6379"
 	cfg.Portfolio.MaxPerUser = 10
 	cfg.Portfolio.MaxPositionsPerPortfolio = 20
+	cfg.Portfolio.Benchmarks = []string{"SPY=S&P 500", "QQQ=Nasdaq 100", "VT=Total world"}
 
 	if data, err := os.ReadFile("config.yaml"); err == nil {
 		_ = yaml.Unmarshal(data, cfg)

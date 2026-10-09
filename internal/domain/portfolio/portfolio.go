@@ -3,6 +3,7 @@ package portfolio
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -12,7 +13,10 @@ var (
 
 	ErrPortfolioNotFound     = errors.New("portfolio not found")
 	ErrPortfolioLimitReached = errors.New("portfolio limit reached")
-	ErrPositionLimitReached  = errors.New("position limit reached")
+	// ErrUnknownBenchmark is returned when a history is requested against a benchmark
+	// symbol that is not in the configured list.
+	ErrUnknownBenchmark     = errors.New("unknown benchmark")
+	ErrPositionLimitReached = errors.New("position limit reached")
 
 	// ErrPortfolioEmpty is returned when an analysis is requested for a portfolio that
 	// has no holdings. ErrPricingUnavailable is returned when it has holdings but none
@@ -47,6 +51,14 @@ type Position struct {
 	AddedAt     time.Time `json:"addedAt"`
 	ValueUsd    float64   `json:"valueUsd"`
 	Change24h   float64   `json:"change24h"`
+	// Derived from the ledger and live price (RealisedPnl is also cached in the DB).
+	// CostBasis = Shares*AvgCost. UnrealisedPnl/Pct are 0 when the price is unavailable
+	// or the holding is closed. Closed means Shares == 0 (listed only with includeClosed).
+	CostBasis        float64 `json:"costBasis"`
+	UnrealisedPnl    float64 `json:"unrealisedPnl"`
+	UnrealisedPnlPct float64 `json:"unrealisedPnlPct"`
+	RealisedPnl      float64 `json:"realisedPnl"`
+	Closed           bool    `json:"closed"`
 }
 
 type Activity struct {
@@ -67,13 +79,18 @@ type Summary struct {
 	TotalValue   float64 `json:"totalValue"`
 	Change30d    float64 `json:"change30d"`
 	ChangePct30d float64 `json:"changePct30d"`
+	// Change30d/ChangePct30d are the 30-day time-weighted return (excludes deposits).
+	RealisedPnl   float64 `json:"realisedPnl"`
+	UnrealisedPnl float64 `json:"unrealisedPnl"`
 }
 
 // PortfoliosSummary aggregates figures across all of a user's portfolios for the
 // dashboard header.
 type PortfoliosSummary struct {
-	TotalValue float64 `json:"totalValue"`
-	ChangePct  float64 `json:"changePct"`
+	TotalValue    float64 `json:"totalValue"`
+	ChangePct     float64 `json:"changePct"` // 30-day time-weighted return across all portfolios
+	RealisedPnl   float64 `json:"realisedPnl"`
+	UnrealisedPnl float64 `json:"unrealisedPnl"`
 	// DiversificationScore is 0–100, derived from holding-value concentration
 	// (HHI): a single holding scores 0, evenly spread holdings approach 100.
 	DiversificationScore int `json:"diversificationScore"`
@@ -91,12 +108,55 @@ type UserHolding struct {
 type ValuePoint struct {
 	Date  string  `json:"date"` // YYYY-MM-DD
 	Value float64 `json:"value"`
+	// BenchmarkClose is the benchmark index close on Date, or the latest earlier close when
+	// the market was closed that day. Nil (omitted) when no close exists or no benchmark
+	// was requested.
+	BenchmarkClose *float64 `json:"benchmarkClose,omitempty"`
+	// ReturnPct is the cumulative time-weighted return (%) from the first point of the
+	// range to this point; 0 on the first point.
+	ReturnPct float64 `json:"returnPct"`
 }
 
-// ValueHistory is the recorded value series for a range, oldest first.
+// ValueHistory is the recorded value series for a range, oldest first. Benchmark is set
+// only when the caller asked for a benchmark overlay.
 type ValueHistory struct {
-	Range  HistoryRange  `json:"range"`
-	Points []*ValuePoint `json:"points"`
+	Range     HistoryRange   `json:"range"`
+	Points    []*ValuePoint  `json:"points"`
+	Benchmark *BenchmarkInfo `json:"benchmark,omitempty"`
+}
+
+// Benchmark is a market index (or ETF proxy) a portfolio's value can be compared with.
+type Benchmark struct {
+	Symbol string `json:"symbol"`
+	Label  string `json:"label"`
+}
+
+// BenchmarkInfo describes the benchmark attached to a ValueHistory. Available is false
+// when the index data could not be fetched, so clients can hide the overlay.
+type BenchmarkInfo struct {
+	Symbol    string `json:"symbol"`
+	Label     string `json:"label"`
+	Available bool   `json:"available"`
+}
+
+// ParseBenchmarks turns config entries of the form "SYMBOL=Label" into Benchmarks.
+// Entries are trimmed, the symbol is upper-cased, and the label falls back to the symbol
+// when omitted. Entries with an empty symbol are skipped.
+func ParseBenchmarks(entries []string) []Benchmark {
+	out := make([]Benchmark, 0, len(entries))
+	for _, e := range entries {
+		sym, label, _ := strings.Cut(e, "=")
+		sym = strings.ToUpper(strings.TrimSpace(sym))
+		label = strings.TrimSpace(label)
+		if sym == "" {
+			continue
+		}
+		if label == "" {
+			label = sym
+		}
+		out = append(out, Benchmark{Symbol: sym, Label: label})
+	}
+	return out
 }
 
 // HistoryRange selects how far back a value history reaches. The values match the
@@ -144,7 +204,8 @@ type Repository interface {
 	Add(ctx context.Context, portfolioID, symbol, name string, shares, avgCost float64, maxPositions int) (*Position, error)
 	Remove(ctx context.Context, portfolioID, symbol string) error
 	Update(ctx context.Context, portfolioID, symbol string, shares, avgCost *float64) (*Position, error)
-	ListByPortfolioID(ctx context.Context, portfolioID string) ([]*Position, error)
+	// ListByPortfolioID omits closed holdings (shares = 0) unless includeClosed.
+	ListByPortfolioID(ctx context.Context, portfolioID string, includeClosed bool) ([]*Position, error)
 	// ListPositionsByUser returns every position across all of the user's portfolios,
 	// with PortfolioID set so callers can group by portfolio.
 	ListPositionsByUser(ctx context.Context, userID string) ([]*Position, error)
@@ -152,6 +213,38 @@ type Repository interface {
 	// GetActivityByUser returns the newest activity across all of the user's portfolios,
 	// with PortfolioID and PortfolioName set on each row.
 	GetActivityByUser(ctx context.Context, userID string, limit int) ([]*Activity, error)
+
+	// Transactions (the ledger). Positions are a cache derived from it: every write below
+	// locks the portfolio row, replays the symbol's transactions (see Replay), and in the
+	// same DB transaction upserts or deletes the position row. A write that would take
+	// the holding negative returns ErrInsufficientShares and changes nothing.
+	//
+	// ListTransactions returns the portfolio's transactions, newest first (trade date,
+	// then created_at); symbol "" means all symbols. RunningShares and RealisedPnl are
+	// not populated (use Replay). ListTransactionsByUser spans all of the user's
+	// portfolios (PortfolioID set), same order.
+	ListTransactions(ctx context.Context, portfolioID, symbol string) ([]*Transaction, error)
+	ListTransactionsByUser(ctx context.Context, userID string) ([]*Transaction, error)
+	// CreateTransaction inserts t (ID/CreatedAt ignored) and returns it with the updated
+	// position (Closed=true if it now holds 0 shares). A buy that would open a new
+	// position when maxPositions open positions already exist returns
+	// ErrPositionLimitReached.
+	CreateTransaction(ctx context.Context, portfolioID string, t *Transaction, maxPositions int) (*Transaction, *Position, error)
+	// UpdateTransaction applies patch to the transaction txID of portfolioID. The row is
+	// re-read and patched inside the locked DB transaction, so a concurrent edit is never
+	// overwritten with a stale merge (symbol/name/isOpening are unchanged).
+	// ErrTransactionNotFound if missing (or txID is not a valid id). A change that takes a
+	// closed symbol back to open when maxPositions open positions already exist returns
+	// ErrPositionLimitReached.
+	UpdateTransaction(
+		ctx context.Context, portfolioID, txID string, patch TransactionPatch, maxPositions int,
+	) (*Transaction, *Position, error)
+	// DeleteTransaction removes it; if it was the symbol's last transaction the position
+	// row is deleted too. ErrTransactionNotFound if missing (or txID is not a valid id).
+	// Deleting a sell can reopen a closed symbol; with maxPositions open positions
+	// already held that returns ErrPositionLimitReached.
+	DeleteTransaction(ctx context.Context, portfolioID, txID string, maxPositions int) error
+	GetTransaction(ctx context.Context, portfolioID, txID string) (*Transaction, error)
 
 	// Value snapshots (scoped to a user, across all of their portfolios)
 	// ListAllHoldings returns every position of every user, for the snapshot job.

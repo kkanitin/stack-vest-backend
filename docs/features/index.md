@@ -14,7 +14,7 @@ feature-specific rules and gotchas. Repo-wide conventions live in the [documenta
 | [Stocks (market data)](./stock.md)               | `/stocks/search`, `/stocks/price-changes`, `/stocks/history`, `/stocks/:symbol/{quote,price-change,history,profile}` | protected | `usecase/stock`, `infrastructure/fmp`, `infrastructure/cached` |
 | [Popular assets](./popular.md)                   | `GET /popular`                                                                        | public    | `handler/popular.go`                                            |
 | [Watchlist](./watchlist.md)                      | `/watchlist`, `/watchlist/:symbol`, `/watchlist/:symbol/alerts`                       | protected | `domain/watchlist`, `usecase/watchlist`, `repository/watchlist` |
-| [Portfolios & positions](./portfolio.md)         | `/portfolios`, `/portfolios/{summary,history,positions,activity}`, `/portfolios/:id[/positions,/summary,/activity]` | protected | `domain/portfolio`, `usecase/portfolio`, `repository/portfolio`, `pkg/worker` |
+| [Portfolios & positions](./portfolio.md)         | `/portfolios`, `/portfolios/{summary,history,benchmarks,positions,activity}`, `/portfolios/:id[/positions,/transactions,/summary,/activity]` | protected | `domain/portfolio`, `usecase/portfolio`, `repository/portfolio`, `infrastructure/cached`, `pkg/worker` |
 | [AI portfolio analysis (SSE)](./portfolio-analysis.md) | `POST /portfolios/analyze`, `POST /portfolios/:id/analyze`                      | protected | `usecase/analysis`, `infrastructure/groq`                       |
 | [DCA simulator](./dca.md)                        | `POST /dca/simulate`                                                                  | protected | `domain/dca`, `usecase/dca`                                     |
 | [Market sentiment](./sentiment.md)               | `GET /sentiment`                                                                      | protected | `domain/sentiment`, `usecase/sentiment`                         |
@@ -27,7 +27,9 @@ response shape.
 
 - **User lookup:** watchlist, portfolio and dividend turn the authenticated email into a user ID with `user.Repository.FindByEmail`.
 - **Pricing:** portfolio uses the shared cached `Quoter` and `PriceChanger` from [stock.md](./stock.md), wrapped once in `main.go`.
-- **Holdings:** dividend and portfolio analysis read positions from the portfolio repository and use case.
+- **Holdings:** dividend and portfolio analysis read positions from the portfolio repository and use case. The dividend
+  calendar also reads the portfolio transaction ledger (`ListTransactionsByUser`) for the shares held at past ex-dates.
+- **Daily closes:** portfolio benchmarks and time-weighted returns share the cached `HistoryCloser` (see [stock.md](./stock.md)).
 - **FMP client** (`infrastructure/fmp`) is used by stock, popular, watchlist (symbol validation), DCA, sentiment and dividend.
 
 ## Adding or changing a feature

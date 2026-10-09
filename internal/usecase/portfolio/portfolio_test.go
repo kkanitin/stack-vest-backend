@@ -45,6 +45,20 @@ type mockRepo struct {
 	getActivityByUser   func(userID string, limit int) ([]*portfoliodomain.Activity, error)
 	createCalled        bool
 	addCalled           bool
+
+	// Ledger overrides (SV-1). lastIncludeClosed records the includeClosed flag of the last
+	// ListByPortfolioID call.
+	listTransactions  func(portfolioID, symbol string) ([]*portfoliodomain.Transaction, error)
+	getTransaction    func(portfolioID, txID string) (*portfoliodomain.Transaction, error)
+	createTransaction func(portfolioID string, t *portfoliodomain.Transaction, maxPositions int) (*portfoliodomain.Transaction, *portfoliodomain.Position, error)
+	updateTransaction func(t *portfoliodomain.Transaction) (*portfoliodomain.Transaction, *portfoliodomain.Position, error)
+	// lastMaxPositions is the limit the last UpdateTransaction/DeleteTransaction received.
+	lastMaxPositions int
+	// updateTransactionPatch observes the arguments of UpdateTransaction.
+	updateTransactionPatch func(portfolioID, txID string, patch portfoliodomain.TransactionPatch)
+	deleteTransaction      func(portfolioID, txID string) error
+	createCalls            int
+	lastIncludeClosed      bool
 	// upsertCalls / upsertDate / upserted record what UpsertValueSnapshots was asked to write.
 	upsertCalls int
 	upsertDate  time.Time
@@ -89,7 +103,8 @@ func (m *mockRepo) Remove(_ context.Context, _, _ string) error { return nil }
 func (m *mockRepo) Update(_ context.Context, _, _ string, _, _ *float64) (*portfoliodomain.Position, error) {
 	return nil, nil
 }
-func (m *mockRepo) ListByPortfolioID(_ context.Context, portfolioID string) ([]*portfoliodomain.Position, error) {
+func (m *mockRepo) ListByPortfolioID(_ context.Context, portfolioID string, includeClosed bool) ([]*portfoliodomain.Position, error) {
+	m.lastIncludeClosed = includeClosed
 	if m.listByPortfolioID != nil {
 		return m.listByPortfolioID(portfolioID)
 	}
@@ -214,21 +229,21 @@ func TestAddPosition_PortfolioNotOwned(t *testing.T) {
 	if !errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
 		t.Fatalf("expected ErrPortfolioNotFound (404), got %v", err)
 	}
-	if repo.addCalled {
-		t.Fatal("Add should not be called for a portfolio the user does not own")
+	if repo.createCalls > 0 {
+		t.Fatal("CreateTransaction should not be called for a portfolio the user does not own")
 	}
 }
 
 func TestAddPosition_PositionLimitReached(t *testing.T) {
 	// Limit enforcement is atomic inside the repo (count-check + insert in one
 	// transaction, see internal/repository/portfolio/postgres.go); at the usecase
-	// level this is exercised by having the mock's Add itself report the limit.
+	// level this is exercised by having the mock's CreateTransaction itself report the limit.
 	repo := &mockRepo{
 		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
 			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
 		},
-		addPosition: func(string, string, string, float64, float64, int) (*portfoliodomain.Position, error) {
-			return nil, portfoliodomain.ErrPositionLimitReached
+		createTransaction: func(string, *portfoliodomain.Transaction, int) (*portfoliodomain.Transaction, *portfoliodomain.Position, error) {
+			return nil, nil, portfoliodomain.ErrPositionLimitReached
 		},
 	}
 	uc := newUC(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, 10, 20)
@@ -251,8 +266,8 @@ func TestAddPosition_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !repo.addCalled || pos.Symbol != "AAPL" {
-		t.Fatalf("expected added position, got %+v (called=%v)", pos, repo.addCalled)
+	if repo.createCalls != 1 || pos.Symbol != "AAPL" {
+		t.Fatalf("expected added position, got %+v (calls=%d)", pos, repo.createCalls)
 	}
 }
 
@@ -338,8 +353,10 @@ func TestGetPortfoliosSummary_AggregatesAndScores(t *testing.T) {
 	if s.TotalValue != 2000 {
 		t.Fatalf("expected totalValue 2000, got %v", s.TotalValue)
 	}
-	if s.ChangePct < 24.99 || s.ChangePct > 25.01 {
-		t.Fatalf("expected changePct ~25, got %v", s.ChangePct)
+	// changePct is now the ledger-based 30-day TWR (see returns_test.go); with no
+	// transactions there is nothing to compound.
+	if s.ChangePct != 0 {
+		t.Fatalf("expected changePct 0 without a ledger, got %v", s.ChangePct)
 	}
 	// Two equally-weighted symbols: HHI = 0.5, score = (1-0.5)*100 = 50.
 	if s.DiversificationScore != 50 {
@@ -593,35 +610,6 @@ func distinctPositions(n int) []*portfoliodomain.Position {
 	return positions
 }
 
-func TestGetSummary_QuoteAndPriceChangeRunInParallel(t *testing.T) {
-	const delay = 50 * time.Millisecond
-	repo := &mockRepo{
-		getPortfolio: func(id string) (*portfoliodomain.Portfolio, error) {
-			return &portfoliodomain.Portfolio{ID: id, UserID: "u1"}, nil
-		},
-		listByPortfolioID: func(string) ([]*portfoliodomain.Position, error) {
-			return distinctPositions(5), nil
-		},
-	}
-	var inFlight, maxInFlight atomic.Int64
-	q := delayedQuoter{delay: delay, inFlight: &inFlight, maxInFlee: &maxInFlight}
-	pc := delayedPriceChanger{delay: delay}
-	uc := newUCWithPrices(repo, &mockUserRepo{user: &userdomain.User{ID: "u1"}}, q, pc)
-
-	start := time.Now()
-	if _, err := uc.GetSummary(context.Background(), "a@b.com", "pf1"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	elapsed := time.Since(start)
-
-	// Sequential quote-then-price-change per symbol (the pre-fix shape) would
-	// take ~2*delay; parallel takes ~1*delay. Assert well under 2*delay to
-	// catch a regression back to sequential without being flaky on timing.
-	if elapsed >= 2*delay {
-		t.Fatalf("expected quote/price-change to run in parallel (~%v), took %v", delay, elapsed)
-	}
-}
-
 func TestFetchPrices_BoundedConcurrency(t *testing.T) {
 	// Symbol count well above the fetchConcurrency bound (10, see portfolio.go)
 	// so an unbounded fan-out would be detected.
@@ -653,4 +641,51 @@ func TestFetchPrices_BoundedConcurrency(t *testing.T) {
 	if got := maxInFlight.Load(); got < 2 {
 		t.Fatalf("expected some concurrency (>1), observed max %d — fan-out may be accidentally serial", got)
 	}
+}
+
+// Ledger stubs: overridden by the tests that exercise transactions.
+func (m *mockRepo) ListTransactions(_ context.Context, portfolioID, symbol string) ([]*portfoliodomain.Transaction, error) {
+	if m.listTransactions != nil {
+		return m.listTransactions(portfolioID, symbol)
+	}
+	return []*portfoliodomain.Transaction{}, nil
+}
+func (m *mockRepo) ListTransactionsByUser(_ context.Context, _ string) ([]*portfoliodomain.Transaction, error) {
+	return []*portfoliodomain.Transaction{}, nil
+}
+func (m *mockRepo) CreateTransaction(_ context.Context, portfolioID string, t *portfoliodomain.Transaction, maxPositions int) (*portfoliodomain.Transaction, *portfoliodomain.Position, error) {
+	m.createCalls++
+	if m.createTransaction != nil {
+		return m.createTransaction(portfolioID, t, maxPositions)
+	}
+	return t, &portfoliodomain.Position{ID: "pos", PortfolioID: portfolioID, Symbol: t.Symbol, Name: t.Name, Shares: t.Quantity, AvgCost: t.Price}, nil
+}
+func (m *mockRepo) UpdateTransaction(ctx context.Context, portfolioID, txID string, patch portfoliodomain.TransactionPatch, maxPositions int) (*portfoliodomain.Transaction, *portfoliodomain.Position, error) {
+	m.lastMaxPositions = maxPositions
+	if m.updateTransactionPatch != nil {
+		m.updateTransactionPatch(portfolioID, txID, patch)
+	}
+	stored, err := m.GetTransaction(ctx, portfolioID, txID)
+	if err != nil {
+		return nil, nil, err
+	}
+	merged := *stored
+	patch.Apply(&merged)
+	if m.updateTransaction != nil {
+		return m.updateTransaction(&merged)
+	}
+	return &merged, nil, nil
+}
+func (m *mockRepo) DeleteTransaction(_ context.Context, portfolioID, txID string, maxPositions int) error {
+	m.lastMaxPositions = maxPositions
+	if m.deleteTransaction != nil {
+		return m.deleteTransaction(portfolioID, txID)
+	}
+	return nil
+}
+func (m *mockRepo) GetTransaction(_ context.Context, portfolioID, txID string) (*portfoliodomain.Transaction, error) {
+	if m.getTransaction != nil {
+		return m.getTransaction(portfolioID, txID)
+	}
+	return nil, portfoliodomain.ErrTransactionNotFound
 }

@@ -39,6 +39,9 @@ Batch endpoints return `400` when there are more than 10 symbols (`domain.ErrToo
 - **Quotes and price changes:** `cached.NewQuoter` and `cached.NewPriceChanger` (30 s TTL) are wrapped once in `main.go`.
   Every consumer shares these instances, including portfolio pricing. Use cases depend on the plain domain interface
   and don't know the cache exists.
+- **Daily closes:** `cached.NewHistoryCloser` (`cached/history.go`, 6 h TTL) wraps `GetHistoryClose` for the portfolio
+  benchmark overlay and for the portfolio time-weighted returns; see [portfolio.md](./portfolio.md#benchmark-overlay)
+  and [portfolio.md](./portfolio.md#returns-time-weighted).
 - **Search results:** a per-normalized-keyword `cache.Keyed` (1 min TTL, max 500 entries, because callers control the keys).
   Concurrent identical misses are coalesced into one fetch.
 - **Symbol universe:** the stock and ETF symbol lists are cached for 24 h (5 min negative TTL). Search uses them to keep
