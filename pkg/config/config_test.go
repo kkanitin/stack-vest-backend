@@ -79,3 +79,42 @@ func TestEnvOverrideInvalidIntKeepsDefault(t *testing.T) {
 		t.Errorf("expected default REDIS_DB=0 for invalid int, got %d", cfg.Redis.DB)
 	}
 }
+
+func TestLoadPortfolioBenchmarks(t *testing.T) {
+	// Run from an empty dir so a developer's config.yaml cannot leak in.
+	t.Chdir(t.TempDir())
+
+	t.Run("default", func(t *testing.T) {
+		cfg := Load()
+		want := []string{"SPY=S&P 500", "QQQ=Nasdaq 100", "VT=Total world"}
+		if len(cfg.Portfolio.Benchmarks) != len(want) {
+			t.Fatalf("expected %v, got %v", want, cfg.Portfolio.Benchmarks)
+		}
+		for i := range want {
+			if cfg.Portfolio.Benchmarks[i] != want[i] {
+				t.Fatalf("expected %v, got %v", want, cfg.Portfolio.Benchmarks)
+			}
+		}
+	})
+
+	t.Run("yaml replaces default", func(t *testing.T) {
+		if err := os.WriteFile("config.yaml", []byte(yamlBenchmarks), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove("config.yaml")
+		cfg := Load()
+		if len(cfg.Portfolio.Benchmarks) != 1 || cfg.Portfolio.Benchmarks[0] != "DIA=Dow" {
+			t.Fatalf("expected [DIA=Dow], got %v", cfg.Portfolio.Benchmarks)
+		}
+	})
+
+	t.Run("env override is comma split and untrimmed", func(t *testing.T) {
+		t.Setenv("PORTFOLIO_BENCHMARKS", "SPY=S&P 500, QQQ=Nasdaq 100")
+		cfg := Load()
+		if len(cfg.Portfolio.Benchmarks) != 2 || cfg.Portfolio.Benchmarks[1] != " QQQ=Nasdaq 100" {
+			t.Fatalf("unexpected env override result: %q", cfg.Portfolio.Benchmarks)
+		}
+	})
+}
+
+const yamlBenchmarks = "portfolio:\n  benchmarks:\n    - \"DIA=Dow\"\n"

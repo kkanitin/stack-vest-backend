@@ -14,6 +14,8 @@ chooses, past or upcoming. Each entry has an estimated payout of `shares × divi
 The response is a list envelope, paginated in memory and sorted by reference date, then symbol. The reference date
 is the payment date, or the ex-date when the payment date is unknown.
 
+Each entry's `shares` is the user's holding at that event's ex-date (see [Shares used](#shares-used)).
+
 `from` and `to` are honored as sent, including past dates. Defaults: `from` is today (UTC), `to` is `from` + 75 days,
 capped at the latest allowed day so a lone `from` near the upper bound is still accepted. The range is inclusive on
 both ends.
@@ -26,11 +28,24 @@ both ends.
 - `from` is earlier than the first day of (current month − 13 months), or `to` is later than the last day of
   (current month + 13 months).
 
+## Shares used
+
+Shares are aggregated per symbol across all of the user's portfolios.
+
+- **Past events** (ex-date today or earlier) use the shares held at the **end of the day before the ex-date**, from the
+  ledger: buys minus sells with a trade date before the ex-date, summed over all portfolios. A position opened on or
+  after the ex-date earns nothing, and one sold since still counts. An event with no ex-date uses its reference date.
+- **Future events** (ex-date after today) use the **current** total shares.
+- **Events with 0 shares are dropped**, so they are not in the response or its `meta.total`.
+- **A symbol with no ledger rows** falls back to the current shares (the case without `WithLedger`, where every event
+  does). The ledger is loaded once per request.
+- `estimatedAmount = shares × dividend`.
+
 ## Code map
 
 - Domain: `internal/domain/dividend/dividend.go` (`Event`, `CalendarEntry`, `Fetcher`, `Cache`, and the range errors
   `ErrInvalidRange`, `ErrRangeTooLong`, `ErrRangeOutOfBounds`)
-- Use case: `internal/usecase/dividend/calendar.go` (`CalendarUseCase`, `resolveWindow`)
+- Use case: `internal/usecase/dividend/calendar.go` (`CalendarUseCase`, `WithLedger`, `resolveWindow`)
 - Repository: `internal/repository/dividend/redis.go` (`RedisCache`)
 - Infrastructure: FMP `GetDividendsCalendar(from, to)`
 - Handler: `internal/delivery/http/handler/dividend.go`
@@ -41,7 +56,9 @@ both ends.
 - FMP `/stable/dividends-calendar?from=&to=`: market-wide. It filters on the **ex-date** and serves past ranges as
   well as forward-dated ones. One call returns at most 4000 rows (see [FMP row cap](#fmp-row-cap)).
   `/stable/dividends?symbol=` is history-only and **can't** be used for upcoming payouts.
-- Holdings come from `portfolio.Repository.ListPositionsByUser`.
+- Current holdings come from `portfolio.Repository.ListPositionsByUser` (open positions only). Past events read the
+  transaction ledger through `ListTransactionsByUser`, wired in `main.go` with `WithLedger(portfolioRepo)`. See
+  [portfolio.md](./portfolio.md#transaction-ledger).
 
 ## Caching design
 
@@ -87,14 +104,11 @@ tile fails, tiles not yet started are skipped and the fill returns the error.
 
 - The range is not clamped. A range outside the limits is a `400`, not a trimmed result. Arbitrary ranges are bounded
   to 13 months either side of the current month and to 92 days per request.
-- Past months are estimated with the user's **current** shares, not the shares held at the time.
 - A payout whose ex-date is more than 45 days before the start of its payment month is missed. So is one whose
   payment date falls in the month before its ex-date's month, and one the provider lists with neither date.
 - An event that moves from one month to another (for example a changed payment date) can be stale for up to 24 h:
   each month's bucket is cached on its own, so the event can show in both months or in neither until both refresh.
-- Shares are aggregated per symbol across portfolios.
-- MVP estimate limits: no ex-date eligibility check (for example, a position opened after the ex-date), and amounts
-  are summed across currencies without conversion.
+- Amounts are an estimate, summed across currencies without conversion.
 - There is no scheduler or cron: the cache fills lazily. Notifications are out of scope.
 
 ## Tests
