@@ -3,6 +3,7 @@
 package market
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -88,4 +89,12 @@ type ConstituentLister interface {
 type BatchQuoter interface {
 	// GetBatchQuotes returns quotes for the symbols it found; unknown symbols are omitted.
 	GetBatchQuotes(symbols []string) ([]Quote, error)
+}
+
+// SnapshotStore persists built heatmaps so a restart can serve the last one
+// immediately instead of waiting for a full rebuild.
+type SnapshotStore interface {
+	// Load returns the stored heatmap for index, or nil, nil when there is none.
+	Load(ctx context.Context, index Index) (*Heatmap, error)
+	Save(ctx context.Context, hm *Heatmap) error
 }

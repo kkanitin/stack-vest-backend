@@ -20,6 +20,7 @@ import (
 	groq "github.com/kanitin/stackvest/backend/internal/infrastructure/groq"
 	"github.com/kanitin/stackvest/backend/internal/infrastructure/throttled"
 	dividendrepo "github.com/kanitin/stackvest/backend/internal/repository/dividend"
+	marketrepo "github.com/kanitin/stackvest/backend/internal/repository/market"
 	portfoliorepo "github.com/kanitin/stackvest/backend/internal/repository/portfolio"
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
 	watchlistrepo "github.com/kanitin/stackvest/backend/internal/repository/watchlist"
@@ -174,7 +175,17 @@ func main() {
 		throttled.NewPriceChanger(avClient, hmCfg.ChangeCallsPerMinute),
 		time.Duration(hmCfg.ChangeTTLMinutes)*time.Minute,
 	)
-	heatmapUC := marketuc.NewHeatmapUseCase(cached.NewConstituentLister(avClient, 24*time.Hour), avClient, heatmapChanger)
+	// Built snapshots are also kept in Redis for 72h (long enough to span a weekend), so a
+	// restart serves the last map at once instead of 503 until the S&P 500 rebuild ends.
+	heatmapUC := marketuc.NewHeatmapUseCase(cached.NewConstituentLister(avClient, 24*time.Hour), avClient, heatmapChanger).
+		WithStore(marketrepo.NewRedisSnapshotStore(redisClient, 72*time.Hour))
+	restoreCtx, cancelRestore := context.WithTimeout(context.Background(), 3*time.Second)
+	if n, err := heatmapUC.Restore(restoreCtx); err != nil {
+		zap.L().Warn("heatmap snapshots not restored; maps rebuild from scratch", zap.Int("restored", n), zap.Error(err))
+	} else {
+		zap.L().Info("heatmap snapshots restored", zap.Int("restored", n))
+	}
+	cancelRestore()
 	heatmapJob := worker.StartPeriodic(time.Duration(hmCfg.RefreshMinutes)*time.Minute, func(ctx context.Context) {
 		err := heatmapUC.Refresh(ctx)
 		if errors.Is(err, context.Canceled) {

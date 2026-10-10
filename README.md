@@ -41,7 +41,7 @@ external services stay confined to the outer layers.
 
 - Go 1.27+
 - PostgreSQL
-- Redis (optional — the dividend calendar falls back to uncached reads when Redis is unavailable)
+- Redis (optional — the dividend calendar falls back to uncached reads, and index heatmaps rebuild from scratch after a restart, when Redis is unavailable)
 
 ## Getting Started
 
@@ -131,7 +131,7 @@ Key settings:
 | `AUTH_GOOGLE_CLIENT_ID`         | —       | Google OAuth client ID             |
 | `AUTH_GOOGLE_CLIENT_SECRET`     | —       | Google OAuth client secret         |
 | `AUTH_JWT_SECRET`               | —       | JWT signing secret                 |
-| `REDIS_ADDR`                    | —       | Redis host:port (dividend cache)   |
+| `REDIS_ADDR`                    | —       | Redis host:port (dividend cache, heatmap snapshots) |
 | `THIRD_PARTY_API_FMP_API_KEY`   | —       | Financial Modeling Prep API key    |
 | `THIRD_PARTY_API_GROQ_API_KEY`  | —       | Groq API key (AI analysis)         |
 | `MARKET_HEATMAP_REFRESH_MINUTES`| `5`     | Index heatmap rebuild interval     |

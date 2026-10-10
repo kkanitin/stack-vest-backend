@@ -29,6 +29,7 @@ type HeatmapUseCase struct {
 	lister  domain.ConstituentLister
 	quoter  domain.BatchQuoter
 	changer stockdomain.PriceChanger
+	store   domain.SnapshotStore // optional; nil keeps snapshots in memory only
 	now     func() time.Time
 
 	mu        sync.RWMutex
@@ -43,6 +44,41 @@ func NewHeatmapUseCase(lister domain.ConstituentLister, quoter domain.BatchQuote
 		now:       time.Now,
 		snapshots: make(map[domain.Index]*domain.Heatmap),
 	}
+}
+
+// WithStore persists every built snapshot to store, and lets Restore load them
+// back after a restart.
+func (uc *HeatmapUseCase) WithStore(store domain.SnapshotStore) *HeatmapUseCase {
+	uc.store = store
+	return uc
+}
+
+// Restore loads the stored snapshot of every index that has none in memory
+// yet, so a restarted server can answer before its first rebuild finishes. It
+// returns how many were restored; an index with nothing stored is not an error.
+func (uc *HeatmapUseCase) Restore(ctx context.Context) (int, error) {
+	if uc.store == nil {
+		return 0, nil
+	}
+	restored := 0
+	var errs []error
+	for _, idx := range domain.Indexes {
+		hm, err := uc.store.Load(ctx, idx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", idx, err))
+			continue
+		}
+		if hm == nil {
+			continue
+		}
+		uc.mu.Lock()
+		if _, ok := uc.snapshots[idx]; !ok {
+			uc.snapshots[idx] = hm
+			restored++
+		}
+		uc.mu.Unlock()
+	}
+	return restored, errors.Join(errs...)
 }
 
 // Get returns the latest snapshot of index, or ErrHeatmapNotReady before the
@@ -76,6 +112,13 @@ func (uc *HeatmapUseCase) Refresh(ctx context.Context) error {
 		uc.mu.Lock()
 		uc.snapshots[idx] = hm
 		uc.mu.Unlock()
+		if uc.store != nil {
+			// The snapshot is already served from memory; a failed save only
+			// costs the fast restart, so it is reported but not fatal.
+			if err := uc.store.Save(ctx, hm); err != nil {
+				errs = append(errs, fmt.Errorf("%s: save snapshot: %w", idx, err))
+			}
+		}
 	}
 	return errors.Join(errs...)
 }

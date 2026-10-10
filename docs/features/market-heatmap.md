@@ -37,8 +37,9 @@ Response (`result`):
 - A `change` value is `null` when that period is unavailable for the symbol. `1D` is always set.
 - Errors:
   - `400` when `index` is missing or unknown.
-  - `503` with `Retry-After: 30` until the first snapshot of that index is built. A cold start takes a few minutes
-    for the S&P 500; Dow 30 and Nasdaq 100 are ready first.
+  - `503` with `Retry-After: 30` until a snapshot of that index exists. After a restart the last snapshots are
+    loaded from Redis, so this only happens when Redis has none (first run, Redis down, or older than 72 h). Then the
+    S&P 500 takes a few minutes to build; Dow 30 and Nasdaq 100 are ready first.
   - `500` for anything else.
 
 ## Code map
@@ -51,8 +52,10 @@ Response (`result`):
   - `internal/infrastructure/fmp/market.go` has `ListConstituents` and `GetBatchQuotes`.
   - `internal/infrastructure/cached/constituents.go` caches the constituents.
   - `internal/infrastructure/throttled/price_changer.go` rate-limits price-change lookups.
+- Repository: `internal/repository/market/redis.go` (`RedisSnapshotStore`) keeps snapshots across restarts.
 - Handler: `internal/delivery/http/handler/market.go`
-- Job: started in `main.go` with `worker.StartPeriodic`, and stopped in `runUntilShutdown`.
+- Job: started in `main.go` with `worker.StartPeriodic` (after `Restore` loads the stored snapshots), and stopped in
+  `runUntilShutdown`.
 
 ## Data & dependencies
 
@@ -65,8 +68,11 @@ Response (`result`):
 
 ## Caching
 
-- Snapshots live in memory, one per index, and are replaced as each index finishes a rebuild. A failed rebuild keeps
-  the previous snapshot.
+- Snapshots are served from memory, one per index, and are replaced as each index finishes a rebuild. A failed
+  rebuild keeps the previous snapshot.
+- Each built snapshot is also written to Redis under `heatmap:v1:<index>` (JSON, 72 h TTL so a weekend restart still
+  has Friday's map). At startup `Restore` loads them (3 s timeout) before the first rebuild. Redis is optional: if it
+  is down, the restore and the saves fail with a log line and the maps rebuild from scratch as before.
 - Constituents: `cached.ConstituentLister`, 24 h per index.
 - 1W/1M/YTD changes: a dedicated `cached.PriceChanger` with the `change_ttl_minutes` TTL. It is separate from the
   30 s cache that interactive endpoints use, and it is shared across the three indexes, so an overlapping symbol
@@ -85,4 +91,5 @@ Response (`result`):
 
 ## Tests
 
-`fmp/market_test.go`, `usecase/market/heatmap_test.go`, `handler/market_test.go`
+`fmp/market_test.go`, `usecase/market/heatmap_test.go` (including restore/save with a fake store),
+`handler/market_test.go`

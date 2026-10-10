@@ -127,3 +127,103 @@ func TestRefreshStopsWhenCancelled(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+type fakeStore struct {
+	saved   map[domain.Index]*domain.Heatmap
+	saveErr error
+	loadErr error
+}
+
+func newFakeStore() *fakeStore { return &fakeStore{saved: map[domain.Index]*domain.Heatmap{}} }
+
+func (f *fakeStore) Load(_ context.Context, index domain.Index) (*domain.Heatmap, error) {
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
+	return f.saved[index], nil
+}
+
+func (f *fakeStore) Save(_ context.Context, hm *domain.Heatmap) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	f.saved[hm.Index] = hm
+	return nil
+}
+
+func TestRestoreServesStoredSnapshots(t *testing.T) {
+	store := newFakeStore()
+	stored := &domain.Heatmap{Index: domain.IndexSP500}
+	store.saved[domain.IndexSP500] = stored
+	uc := newTestUC(&fakeLister{}).WithStore(store)
+
+	n, err := uc.Restore(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("expected 1 restored and no error, got %d, %v", n, err)
+	}
+	if got, err := uc.Get(domain.IndexSP500); err != nil || got != stored {
+		t.Fatalf("expected the stored snapshot, got %v, %v", got, err)
+	}
+	if _, err := uc.Get(domain.IndexDow30); !errors.Is(err, domain.ErrHeatmapNotReady) {
+		t.Errorf("index with nothing stored should stay not ready, got %v", err)
+	}
+}
+
+func TestRestoreKeepsSnapshotsBuiltInMemory(t *testing.T) {
+	lister := &fakeLister{byIndex: map[domain.Index][]domain.Constituent{
+		domain.IndexDow30: {{Symbol: "AAPL", Sector: "Technology"}},
+	}}
+	store := newFakeStore()
+	uc := newTestUC(lister).WithStore(store)
+	if err := uc.Refresh(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	built, _ := uc.Get(domain.IndexDow30)
+
+	store.saved[domain.IndexDow30] = &domain.Heatmap{Index: domain.IndexDow30}
+	if n, _ := uc.Restore(context.Background()); n != 0 {
+		t.Errorf("expected nothing restored over an in-memory snapshot, got %d", n)
+	}
+	if got, _ := uc.Get(domain.IndexDow30); got != built {
+		t.Error("Restore replaced a snapshot built in memory")
+	}
+}
+
+func TestRestoreReportsLoadErrors(t *testing.T) {
+	store := newFakeStore()
+	store.loadErr = errors.New("redis down")
+	uc := newTestUC(&fakeLister{}).WithStore(store)
+	if n, err := uc.Restore(context.Background()); err == nil || n != 0 {
+		t.Fatalf("expected an error and nothing restored, got %d, %v", n, err)
+	}
+}
+
+func TestRefreshSavesSnapshots(t *testing.T) {
+	lister := &fakeLister{byIndex: map[domain.Index][]domain.Constituent{
+		domain.IndexDow30: {{Symbol: "AAPL", Sector: "Technology"}},
+	}}
+	store := newFakeStore()
+	uc := newTestUC(lister).WithStore(store)
+	if err := uc.Refresh(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	built, _ := uc.Get(domain.IndexDow30)
+	if store.saved[domain.IndexDow30] != built {
+		t.Error("expected the built snapshot to be saved")
+	}
+}
+
+func TestRefreshPublishesWhenSaveFails(t *testing.T) {
+	lister := &fakeLister{byIndex: map[domain.Index][]domain.Constituent{
+		domain.IndexDow30: {{Symbol: "AAPL", Sector: "Technology"}},
+	}}
+	store := newFakeStore()
+	store.saveErr = errors.New("redis down")
+	uc := newTestUC(lister).WithStore(store)
+	if err := uc.Refresh(context.Background()); err == nil {
+		t.Fatal("expected the save failure to be reported")
+	}
+	if _, err := uc.Get(domain.IndexDow30); err != nil {
+		t.Errorf("snapshot should still be served after a failed save: %v", err)
+	}
+}
