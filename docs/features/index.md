@@ -16,7 +16,7 @@ feature-specific rules and gotchas. Repo-wide conventions live in the [documenta
 | [Watchlist](./watchlist.md)                      | `/watchlist`, `/watchlist/:symbol`, `/watchlist/:symbol/alerts`                       | protected | `domain/watchlist`, `usecase/watchlist`, `repository/watchlist` |
 | [Portfolios & positions](./portfolio.md)         | `/portfolios`, `/portfolios/{summary,history,benchmarks,positions,activity}`, `/portfolios/:id[/positions,/transactions,/summary,/activity]` | protected | `domain/portfolio`, `usecase/portfolio`, `repository/portfolio`, `infrastructure/cached`, `pkg/worker` |
 | [AI portfolio analysis (SSE)](./portfolio-analysis.md) | `POST /portfolios/analyze`, `POST /portfolios/:id/analyze`                      | protected | `usecase/analysis`, `infrastructure/groq`                       |
-| [DCA simulator](./dca.md)                        | `POST /dca/simulate`                                                                  | protected | `domain/dca`, `usecase/dca`                                     |
+| [DCA simulator](./dca.md)                        | `POST /dca/{simulate,compare,holdings}`                                               | protected | `domain/dca`, `usecase/dca`, `infrastructure/cached`            |
 | [Market sentiment](./sentiment.md)               | `GET /sentiment`                                                                      | protected | `domain/sentiment`, `usecase/sentiment`                         |
 | [Dividend calendar](./dividend.md)               | `GET /dividends/calendar`                                                             | protected | `usecase/dividend`, `repository/dividend` (Redis)               |
 

@@ -403,11 +403,12 @@ func (c *Client) GetHistoricalPrices(symbol string, from, to time.Time) ([]dca.H
 		if err != nil {
 			continue
 		}
-		price := h.AdjClose
-		if price == 0 {
-			price = h.Close
+		// Plain close: split-adjusted, not dividend-adjusted, so dividends are not counted as
+		// reinvested. adjClose is deliberately ignored.
+		if h.Close <= 0 {
+			continue
 		}
-		prices = append(prices, dca.HistoricalPrice{Date: t, AdjClose: price})
+		prices = append(prices, dca.HistoricalPrice{Date: t, Close: h.Close})
 	}
 	return prices, nil
 }

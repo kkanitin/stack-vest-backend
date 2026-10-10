@@ -1,10 +1,19 @@
 package dca
 
 import (
+	"errors"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/kanitin/stackvest/backend/internal/domain/dca"
+)
+
+// Notes sent with every result so a client can explain the figures it shows.
+const (
+	annualizedReturnNote    = "CAGR-based estimate (total-capital basis, not IRR)"
+	moneyWeightedReturnNote = "Annualised IRR (XIRR): each purchase counts from its own date"
+	priceBasisNote          = "Price movement only: closes are split-adjusted, dividends are not reinvested"
 )
 
 type SimulatorUseCase struct {
@@ -13,6 +22,50 @@ type SimulatorUseCase struct {
 
 func NewSimulatorUseCase(fetcher dca.PriceFetcher) *SimulatorUseCase {
 	return &SimulatorUseCase{fetcher: fetcher}
+}
+
+// Compare runs the same plan (amount, frequency, range) for each symbol. An asset with no
+// usable history for the range is skipped, not an error. It returns an error only when
+// nothing could be simulated and at least one asset failed for a reason other than missing
+// history (a provider outage), so an outage is not reported as "no history".
+func (uc *SimulatorUseCase) Compare(symbols []string, plan dca.SimulationInput) (*dca.Comparison, error) {
+	type outcome struct {
+		result *dca.SimulationResult
+		err    error
+	}
+	outcomes := make([]outcome, len(symbols))
+
+	var wg sync.WaitGroup
+	for i, symbol := range symbols {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			in := plan
+			in.Symbol = symbol
+			outcomes[i].result, outcomes[i].err = uc.Execute(in)
+		}()
+	}
+	wg.Wait()
+
+	cmp := &dca.Comparison{Results: []*dca.SimulationResult{}, Skipped: []dca.SkippedSymbol{}}
+	var upstream error
+	for i, o := range outcomes {
+		switch {
+		case o.err == nil:
+			cmp.Results = append(cmp.Results, o.result)
+		case errors.Is(o.err, dca.ErrSymbolNotFound):
+			cmp.Skipped = append(cmp.Skipped, dca.SkippedSymbol{Symbol: symbols[i], Reason: "No price history for this date range"})
+		case errors.Is(o.err, dca.ErrDateRangeTooShort):
+			cmp.Skipped = append(cmp.Skipped, dca.SkippedSymbol{Symbol: symbols[i], Reason: "Not enough price history for this plan"})
+		default:
+			upstream = o.err
+			cmp.Skipped = append(cmp.Skipped, dca.SkippedSymbol{Symbol: symbols[i], Reason: "Price history could not be loaded"})
+		}
+	}
+	if len(cmp.Results) == 0 && upstream != nil {
+		return nil, upstream
+	}
+	return cmp, nil
 }
 
 func (uc *SimulatorUseCase) Execute(input dca.SimulationInput) (*dca.SimulationResult, error) {
@@ -26,7 +79,7 @@ func (uc *SimulatorUseCase) Execute(input dca.SimulationInput) (*dca.SimulationR
 
 	priceMap := make(map[string]float64, len(prices))
 	for _, p := range prices {
-		priceMap[p.Date.Format("2006-01-02")] = p.AdjClose
+		priceMap[p.Date.Format("2006-01-02")] = p.Close
 	}
 
 	resolvedDates := resolveDates(input.StartDate, input.EndDate, input.Frequency, priceMap)
@@ -35,10 +88,13 @@ func (uc *SimulatorUseCase) Execute(input dca.SimulationInput) (*dca.SimulationR
 	}
 
 	var totalUnits, totalInvested float64
+	flows := make([]cashFlow, 0, len(resolvedDates))
 	dataPoints := make([]dca.DataPoint, 0, len(resolvedDates))
 
 	for _, dateKey := range resolvedDates {
 		price := priceMap[dateKey]
+		bought, _ := time.Parse("2006-01-02", dateKey)
+		flows = append(flows, cashFlow{Date: bought, Amount: input.Amount})
 		unitsPurchased := input.Amount / price
 		totalUnits += unitsPurchased
 		totalInvested += input.Amount
@@ -56,29 +112,48 @@ func (uc *SimulatorUseCase) Execute(input dca.SimulationInput) (*dca.SimulationR
 		})
 	}
 
-	lastPrice := prices[len(prices)-1].AdjClose
+	lastPrice := prices[len(prices)-1].Close
+	lastDate := prices[len(prices)-1].Date
 	finalPortfolioValue := totalUnits * lastPrice
 	totalReturn := finalPortfolioValue - totalInvested
 	totalReturnPct := (totalReturn / totalInvested) * 100
 
+	// The last purchase is usually before the last trading day in the range. Close the series
+	// there (no purchase) so its final point equals FinalPortfolioValue.
+	if lastKey := lastDate.Format("2006-01-02"); lastKey != dataPoints[len(dataPoints)-1].Date {
+		dataPoints = append(dataPoints, dca.DataPoint{
+			Date:           lastKey,
+			Price:          lastPrice,
+			TotalUnits:     totalUnits,
+			TotalInvested:  totalInvested,
+			PortfolioValue: finalPortfolioValue,
+			ReturnPct:      totalReturnPct,
+		})
+	}
+
 	years := input.EndDate.Sub(input.StartDate).Hours() / (365.25 * 24)
 	annualizedReturnPct := (math.Pow(finalPortfolioValue/totalInvested, 1/years) - 1) * 100
 
+	moneyWeighted := moneyWeightedReturnPct(flows, lastDate, finalPortfolioValue)
+
 	return &dca.SimulationResult{
-		Symbol:               input.Symbol,
-		StartDate:            input.StartDate.Format("2006-01-02"),
-		EndDate:              input.EndDate.Format("2006-01-02"),
-		Frequency:            input.Frequency,
-		AmountPerPeriod:      input.Amount,
-		TotalInvested:        totalInvested,
-		FinalPortfolioValue:  finalPortfolioValue,
-		TotalReturn:          totalReturn,
-		TotalReturnPct:       totalReturnPct,
-		AnnualizedReturnPct:  annualizedReturnPct,
-		AnnualizedReturnNote: "CAGR-based estimate (total-capital basis, not IRR)",
-		PeriodsCount:         len(resolvedDates),
-		TotalUnits:           totalUnits,
-		DataPoints:           dataPoints,
+		Symbol:                  input.Symbol,
+		StartDate:               input.StartDate.Format("2006-01-02"),
+		EndDate:                 input.EndDate.Format("2006-01-02"),
+		Frequency:               input.Frequency,
+		AmountPerPeriod:         input.Amount,
+		TotalInvested:           totalInvested,
+		FinalPortfolioValue:     finalPortfolioValue,
+		TotalReturn:             totalReturn,
+		TotalReturnPct:          totalReturnPct,
+		AnnualizedReturnPct:     annualizedReturnPct,
+		AnnualizedReturnNote:    annualizedReturnNote,
+		MoneyWeightedReturnPct:  moneyWeighted,
+		MoneyWeightedReturnNote: moneyWeightedReturnNote,
+		PriceBasisNote:          priceBasisNote,
+		PeriodsCount:            len(resolvedDates),
+		TotalUnits:              totalUnits,
+		DataPoints:              dataPoints,
 	}, nil
 }
 
@@ -160,4 +235,52 @@ func nextTradingDay(target time.Time, priceMap map[string]float64) (date string,
 		}
 	}
 	return "", 0, false
+}
+
+// cashFlow is money put in on a date.
+type cashFlow struct {
+	Date   time.Time
+	Amount float64
+}
+
+// moneyWeightedReturnPct is the annualised internal rate of return (XIRR) of putting in each
+// flow on its date and holding until end, when the holding is worth finalValue. It returns
+// nil when no rate can be solved (no flow before end, or a total loss).
+//
+// Multiplying NPV by (1+r)^T gives g(r) = finalValue - sum(amount*(1+r)^(T-t_i)), which is
+// strictly decreasing in r when some flow predates end, so bisection finds the one root.
+func moneyWeightedReturnPct(flows []cashFlow, end time.Time, finalValue float64) *float64 {
+	const hoursPerYear = 365.0 * 24
+	spans := make([]float64, len(flows))
+	for i, f := range flows {
+		spans[i] = end.Sub(f.Date).Hours() / hoursPerYear
+	}
+	g := func(r float64) float64 {
+		sum := finalValue
+		for i, years := range spans {
+			sum -= flows[i].Amount * math.Pow(1+r, years)
+		}
+		return sum
+	}
+
+	lo, hi := -0.999999, 1.0
+	if finalValue <= 0 || g(lo) <= 0 {
+		return nil
+	}
+	for g(hi) > 0 {
+		hi *= 2
+		if hi > 1e9 {
+			return nil
+		}
+	}
+	for i := 0; i < 200; i++ {
+		mid := (lo + hi) / 2
+		if g(mid) > 0 {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	pct := (lo + hi) / 2 * 100
+	return &pct
 }

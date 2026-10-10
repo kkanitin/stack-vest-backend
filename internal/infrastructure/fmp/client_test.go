@@ -87,8 +87,8 @@ func TestGetHistoricalPrices_ArrayResponse(t *testing.T) {
 	if len(prices) != 2 {
 		t.Fatalf("expected 2 prices, got %d", len(prices))
 	}
-	if prices[0].AdjClose != 185.5 {
-		t.Errorf("expected first price 185.5 (ascending), got %f", prices[0].AdjClose)
+	if prices[0].Close != 185.5 {
+		t.Errorf("expected first price 185.5 (ascending), got %f", prices[0].Close)
 	}
 }
 
@@ -611,11 +611,30 @@ func TestGetHistoricalPrices_FallsBackToCloseWhenAdjCloseMissing(t *testing.T) {
 	if len(prices) != 2 {
 		t.Fatalf("expected 2 prices, got %d", len(prices))
 	}
-	if prices[0].AdjClose != 185.5 {
-		t.Errorf("expected first price 185.5 (close fallback), got %f", prices[0].AdjClose)
+	if prices[0].Close != 185.5 {
+		t.Errorf("expected first price 185.5 (close fallback), got %f", prices[0].Close)
 	}
-	if prices[1].AdjClose != 184.0 {
-		t.Errorf("expected second price 184.0 (close fallback), got %f", prices[1].AdjClose)
+	if prices[1].Close != 184.0 {
+		t.Errorf("expected second price 184.0 (close fallback), got %f", prices[1].Close)
+	}
+}
+
+func TestGetHistoricalPrices_UsesCloseNotAdjClose(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"date":"2024-01-03","close":184.0,"adjClose":170.0},{"date":"2024-01-02","close":185.5,"adjClose":171.0},{"date":"2024-01-01","close":0,"adjClose":0}]`))
+	}))
+	defer srv.Close()
+
+	client := &Client{apiKey: "test", httpClient: srv.Client(), baseURL: srv.URL}
+	prices, err := client.GetHistoricalPrices("AAPL", mustParseDate("2024-01-01"), mustParseDate("2024-01-05"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(prices) != 2 {
+		t.Fatalf("expected 2 prices (zero close skipped), got %d", len(prices))
+	}
+	if prices[0].Close != 185.5 || prices[1].Close != 184.0 {
+		t.Errorf("expected plain closes 185.5, 184.0 (adjClose ignored), got %f, %f", prices[0].Close, prices[1].Close)
 	}
 }
 

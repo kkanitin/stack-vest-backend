@@ -32,7 +32,7 @@ func buildPrices(start, end time.Time, price float64) []dca.HistoricalPrice {
 		if cur.Weekday() == time.Saturday || cur.Weekday() == time.Sunday {
 			continue
 		}
-		prices = append(prices, dca.HistoricalPrice{Date: cur, AdjClose: price})
+		prices = append(prices, dca.HistoricalPrice{Date: cur, Close: price})
 	}
 	return prices
 }
@@ -81,7 +81,7 @@ func TestMonthlyRisingPrice(t *testing.T) {
 			if cur.Weekday() == time.Saturday || cur.Weekday() == time.Sunday {
 				continue
 			}
-			prices = append(prices, dca.HistoricalPrice{Date: cur, AdjClose: p})
+			prices = append(prices, dca.HistoricalPrice{Date: cur, Close: p})
 		}
 	}
 
@@ -180,6 +180,9 @@ func TestBiweeklyAnchoring(t *testing.T) {
 	}
 	// Every investment date should be a Monday
 	for _, dp := range result.DataPoints {
+		if dp.UnitsPurchased == 0 {
+			continue // closing point, not a purchase
+		}
 		d := date(dp.Date)
 		if d.Weekday() != time.Monday {
 			t.Errorf("expected Monday, got %s (%s)", d.Weekday(), dp.Date)
@@ -205,7 +208,7 @@ func TestSimulate_Errors(t *testing.T) {
 		},
 		{
 			name:   "single period → date range too short",
-			prices: []dca.HistoricalPrice{{Date: date("2023-01-02"), AdjClose: 100.0}},
+			prices: []dca.HistoricalPrice{{Date: date("2023-01-02"), Close: 100.0}},
 			input: dca.SimulationInput{
 				Symbol: "TEST", StartDate: date("2023-01-01"), EndDate: date("2023-01-31"),
 				Amount: 100.0, Frequency: dca.FrequencyMonthly,
@@ -245,5 +248,113 @@ func TestCAGRFormula(t *testing.T) {
 	// Flat price → finalPortfolioValue == totalInvested → CAGR = 0%
 	if math.Abs(result.AnnualizedReturnPct) > 1e-6 {
 		t.Errorf("annualizedReturnPct should be ~0 for flat price, got %f", result.AnnualizedReturnPct)
+	}
+}
+
+// risingPrices returns weekday closes that grow 0.1% per calendar day from base.
+func risingPrices(start, end time.Time, base float64) []dca.HistoricalPrice {
+	var prices []dca.HistoricalPrice
+	for cur := start; !cur.After(end); cur = cur.AddDate(0, 0, 1) {
+		if cur.Weekday() == time.Saturday || cur.Weekday() == time.Sunday {
+			continue
+		}
+		days := cur.Sub(start).Hours() / 24
+		prices = append(prices, dca.HistoricalPrice{Date: cur, Close: base * math.Pow(1.001, days)})
+	}
+	return prices
+}
+
+func TestMoneyWeightedReturn_SolvesIRROfTheDatedPurchases(t *testing.T) {
+	start, end := date("2022-01-03"), date("2024-01-03")
+	prices := risingPrices(start, end, 100)
+
+	uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: prices})
+	result, err := uc.Execute(dca.SimulationInput{
+		Symbol: "TEST", StartDate: start, EndDate: end, Amount: 100, Frequency: dca.FrequencyMonthly,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.MoneyWeightedReturnPct == nil {
+		t.Fatal("moneyWeightedReturnPct is nil")
+	}
+	r := *result.MoneyWeightedReturnPct / 100
+
+	// Independent check: discounting every dated cash flow at the returned rate nets to ~0.
+	endDate := date(result.EndDate)
+	npv := result.FinalPortfolioValue
+	for _, dp := range result.DataPoints {
+		if dp.UnitsPurchased == 0 {
+			continue // closing point, not a purchase
+		}
+		years := endDate.Sub(date(dp.Date)).Hours() / (365 * 24)
+		npv -= result.AmountPerPeriod * math.Pow(1+r, years)
+	}
+	if math.Abs(npv) > 1e-4 {
+		t.Errorf("NPV at the returned rate = %f, want ~0 (rate %f)", npv, r)
+	}
+
+	// Steady growth: money invested later has had less time to grow, so the dated rate beats
+	// the total-capital CAGR, which treats every purchase as made on day one.
+	if *result.MoneyWeightedReturnPct <= result.AnnualizedReturnPct {
+		t.Errorf("money-weighted %f should exceed CAGR %f for a steadily rising price",
+			*result.MoneyWeightedReturnPct, result.AnnualizedReturnPct)
+	}
+	if result.MoneyWeightedReturnNote == "" || result.PriceBasisNote == "" {
+		t.Error("notes must be set")
+	}
+}
+
+func TestMoneyWeightedReturn_FlatPriceIsZero(t *testing.T) {
+	start, end := date("2023-01-02"), date("2023-12-29")
+	uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: buildPrices(start, end, 100)})
+	result, err := uc.Execute(dca.SimulationInput{
+		Symbol: "TEST", StartDate: start, EndDate: end, Amount: 100, Frequency: dca.FrequencyWeekly,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.MoneyWeightedReturnPct == nil || math.Abs(*result.MoneyWeightedReturnPct) > 1e-4 {
+		t.Errorf("flat price should give ~0, got %v", result.MoneyWeightedReturnPct)
+	}
+}
+
+func TestDataPoints_EndOnTheLastTradingDayWithTheFinalValue(t *testing.T) {
+	start, end := date("2023-01-02"), date("2023-03-31")
+	uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: risingPrices(start, end, 100)})
+	result, err := uc.Execute(dca.SimulationInput{
+		Symbol: "TEST", StartDate: start, EndDate: end, Amount: 100, Frequency: dca.FrequencyMonthly,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	last := result.DataPoints[len(result.DataPoints)-1]
+	if last.Date != "2023-03-31" {
+		t.Errorf("last data point date = %s, want the last trading day 2023-03-31", last.Date)
+	}
+	if last.PortfolioValue != result.FinalPortfolioValue {
+		t.Errorf("last portfolioValue %f != finalPortfolioValue %f", last.PortfolioValue, result.FinalPortfolioValue)
+	}
+	if last.UnitsPurchased != 0 || last.TotalInvested != result.TotalInvested {
+		t.Errorf("closing point must not add a purchase: %+v", last)
+	}
+	if result.PeriodsCount != 3 {
+		t.Errorf("periodsCount = %d, want 3 purchases (closing point excluded)", result.PeriodsCount)
+	}
+}
+
+func TestDataPoints_NoExtraPointWhenLastPurchaseIsTheLastDay(t *testing.T) {
+	// Daily purchases: the last trading day is itself a purchase.
+	start, end := date("2023-01-02"), date("2023-01-13")
+	uc := dcauc.NewSimulatorUseCase(&mockFetcher{prices: buildPrices(start, end, 100)})
+	result, err := uc.Execute(dca.SimulationInput{
+		Symbol: "TEST", StartDate: start, EndDate: end, Amount: 100, Frequency: dca.FrequencyDaily,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.DataPoints) != result.PeriodsCount {
+		t.Errorf("got %d data points for %d purchases", len(result.DataPoints), result.PeriodsCount)
 	}
 }
