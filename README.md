@@ -20,13 +20,13 @@ external services stay confined to the outer layers.
 - **Market sentiment** and **popular stocks** endpoints
 - **Rate limiting** — token-bucket, keyed per-IP for public routes and per-user for authenticated ones
 - **Consistent API contract** — standard response envelope, `lowerCamelCase` JSON, and uniform pagination across all list endpoints
-- **Operational polish** — structured JSON logging (`slog`), graceful shutdown, and automatic DB migrations on startup
+- **Operational polish** — structured JSON logging (`zap`), graceful shutdown, and automatic DB migrations on startup
 
 ## Tech Stack
 
 | Concern         | Choice                                          |
 |-----------------|-------------------------------------------------|
-| Language        | Go 1.26+                                         |
+| Language        | Go 1.27+                                         |
 | HTTP framework  | Gin                                              |
 | Database        | PostgreSQL (`pgx`)                               |
 | Cache           | Redis (`go-redis`)                               |
@@ -34,24 +34,29 @@ external services stay confined to the outer layers.
 | Auth            | Google OAuth 2.0 + JWT (`golang-jwt`)            |
 | AI              | Groq (SSE streaming)                             |
 | Market data     | Financial Modeling Prep (FMP)                    |
-| Logging         | `log/slog`                                       |
+| Logging         | `zap`                                            |
 
 ## Requirements
 
-- Go 1.26.2+
+- Go 1.27+
 - PostgreSQL
 - Redis (optional — the dividend calendar falls back to uncached reads when Redis is unavailable)
 
 ## Getting Started
 
-1. Copy the config file and fill in your values:
+1. Start PostgreSQL and Redis (or point the config at your own instances):
+   ```bash
+   docker compose up -d
+   ```
+
+2. Copy the config file and fill in your values:
    ```bash
    cp config.yaml.example config.yaml
    ```
    At minimum, set `db.postgres.dsn` and the `auth.google` / `auth.jwt` secrets. Every value can also
    be supplied via environment variable (see [Configuration](#configuration)).
 
-2. Run the server:
+3. Run the server:
    ```bash
    go run main.go
    ```
@@ -145,8 +150,8 @@ SQL files embedded in the binary at `pkg/migrate/migrations/`.
 
 1. Create a new pair of files in `pkg/migrate/migrations/`:
    ```
-   000011_your_description.up.sql
-   000011_your_description.down.sql
+   000013_your_description.up.sql
+   000013_your_description.down.sql
    ```
 2. Write the forward change in `.up.sql` and the rollback in `.down.sql`.
 3. Restart the server — the migration runs automatically.
@@ -174,7 +179,7 @@ pkg/
   config/             # Config loading with env var overrides
   database/           # PostgreSQL client setup
   cache/              # Redis client setup
-  logger/             # slog configuration
+  logger/             # zap configuration
   migrate/            # Migration runner + embedded SQL files
     migrations/       # Versioned .up.sql / .down.sql files
 ```

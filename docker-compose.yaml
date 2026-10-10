@@ -1,16 +1,16 @@
 services:
-  mongodb:
-    image: mongo:8.0
-    container_name: stackvest-mongo
+  postgres:
+    image: postgres:17
+    container_name: stackvest-postgres
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "5432:5432"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: changeme
-      MONGO_INITDB_DATABASE: stackvest
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: stackvest
     volumes:
-      - /path/to/your/local/data/db:/data/db
+      - /path/to/your/local/data/db:/var/lib/postgresql/data
 
   redis:
     image: redis:7
