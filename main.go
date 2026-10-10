@@ -14,8 +14,10 @@ import (
 
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/handler"
 	"github.com/kanitin/stackvest/backend/internal/delivery/http/router"
+	marketdomain "github.com/kanitin/stackvest/backend/internal/domain/market"
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
 	"github.com/kanitin/stackvest/backend/internal/infrastructure/cached"
+	"github.com/kanitin/stackvest/backend/internal/infrastructure/constituents"
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
 	groq "github.com/kanitin/stackvest/backend/internal/infrastructure/groq"
 	"github.com/kanitin/stackvest/backend/internal/infrastructure/throttled"
@@ -164,22 +166,31 @@ func main() {
 	dividendHandler := handler.NewDividendHandler(dividendUC)
 
 	// Index heatmaps: rebuilt in the background and served from memory (see
-	// docs/features/market-heatmap.md). The 1W/1M/YTD changes have their own long-lived
-	// cache, and its misses are throttled so a rebuild of ~500 symbols stays inside the
-	// FMP per-minute budget that interactive requests share.
+	// docs/features/market-heatmap.md). Each tile needs a company profile (name, sector,
+	// market cap; cached a day) and a price change (all four periods; cached
+	// change_ttl_minutes). Cache misses for both share one rate limiter, so a rebuild of
+	// ~500 symbols stays inside the FMP per-minute budget that interactive requests share.
 	hmCfg := cfg.Market.Heatmap
 	// A zero interval would panic the ticker and a zero rate would block forever.
 	hmCfg.RefreshMinutes = max(hmCfg.RefreshMinutes, 1)
-	hmCfg.ChangeCallsPerMinute = max(hmCfg.ChangeCallsPerMinute, 1)
+	hmCfg.CallsPerMinute = max(hmCfg.CallsPerMinute, 1)
+	heatmapLimiter := throttled.NewLimiter(hmCfg.CallsPerMinute)
 	heatmapChanger := cached.NewPriceChanger(
-		throttled.NewPriceChanger(avClient, hmCfg.ChangeCallsPerMinute),
+		throttled.NewPriceChanger(avClient, heatmapLimiter),
 		time.Duration(hmCfg.ChangeTTLMinutes)*time.Minute,
 	)
+	heatmapProfiles := cached.NewProfileFetcher(throttled.NewProfileFetcher(avClient, heatmapLimiter), 24*time.Hour)
+	// Index members come from FMP when the plan includes its constituents endpoints, and
+	// from the lists bundled in internal/infrastructure/constituents otherwise (Starter).
+	heatmapLister := cached.NewConstituentLister(constituents.NewFallbackLister(avClient, constituents.StaticLister{},
+		func(index marketdomain.Index, cause error) {
+			zap.L().Info("FMP index lists not on plan; using bundled lists", zap.String("index", string(index)), zap.NamedError("cause", cause))
+		}), 24*time.Hour)
 	// Built snapshots are also kept in Redis for 72h (long enough to span a weekend), so a
 	// restart serves the last map at once instead of 503 until the S&P 500 rebuild ends.
-	heatmapUC := marketuc.NewHeatmapUseCase(cached.NewConstituentLister(avClient, 24*time.Hour), avClient, heatmapChanger).
+	heatmapUC := marketuc.NewHeatmapUseCase(heatmapLister, heatmapProfiles, heatmapChanger).
 		WithStore(marketrepo.NewRedisSnapshotStore(redisClient, 72*time.Hour)).
-		WithEvents(logHeatmapEvent(hmCfg.ChangeCallsPerMinute))
+		WithEvents(logHeatmapEvent(hmCfg.CallsPerMinute))
 	restoreCtx, cancelRestore := context.WithTimeout(context.Background(), 3*time.Second)
 	if n, err := heatmapUC.Restore(restoreCtx); err != nil {
 		zap.L().Warn("heatmap snapshots not restored; maps rebuild from scratch", zap.Int("restored", n), zap.Error(err))
@@ -242,17 +253,20 @@ func logHeatmapEvent(callsPerMinute int) func(marketuc.Event) {
 		case marketuc.EventStarted:
 			zap.L().Info("heatmap build started", idx, zap.Int("symbols", e.Symbols))
 		case marketuc.EventProgress:
-			remaining := e.Symbols - e.Done
-			// An upper bound: cached lookups don't wait on the rate limit.
-			eta := time.Duration(float64(remaining) / float64(callsPerMinute) * float64(time.Minute)).Round(time.Second)
+			// Two calls per symbol (profile + price change). An upper bound: cached
+			// lookups don't wait on the rate limit.
+			remainingCalls := 2 * (e.Symbols - e.Done)
+			eta := time.Duration(float64(remainingCalls) / float64(callsPerMinute) * float64(time.Minute)).Round(time.Second)
 			zap.L().Info("heatmap build in progress, waiting on rate-limited FMP calls", idx,
 				zap.Int("done", e.Done), zap.Int("total", e.Symbols), zap.Duration("elapsed", e.Elapsed.Round(time.Second)),
 				zap.Duration("etaUpTo", eta))
 		case marketuc.EventBuilt:
 			fields := []zap.Field{idx, zap.Int("stocks", e.Stocks), zap.Int("symbols", e.Symbols), zap.Duration("elapsed", e.Elapsed.Round(time.Second))}
-			if e.MissingChanges > 0 {
-				zap.L().Warn("heatmap built, but some 1W/1M/YTD changes are missing",
-					append(fields, zap.Int("missingChanges", e.MissingChanges), zap.NamedError("sampleError", e.FirstChangeErr))...)
+			if e.MissingProfiles > 0 || e.MissingChanges > 0 {
+				// missingProfiles: left off the map (no size); missingChanges: drawn grey.
+				zap.L().Warn("heatmap built with gaps: some stocks missing or without changes",
+					append(fields, zap.Int("missingProfiles", e.MissingProfiles), zap.Int("missingChanges", e.MissingChanges),
+						zap.NamedError("sampleError", e.SampleErr))...)
 				return
 			}
 			zap.L().Info("heatmap built", fields...)

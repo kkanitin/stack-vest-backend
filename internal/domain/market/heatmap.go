@@ -41,19 +41,13 @@ func ParseIndex(s string) (Index, error) {
 	return "", ErrUnknownIndex
 }
 
+// Constituent is an index member. Only Symbol is required: the heatmap takes
+// name, sector and sub-sector from the company profile.
 type Constituent struct {
 	Symbol    string
 	Name      string
 	Sector    string
 	SubSector string
-}
-
-// Quote is the slice of a live quote the heatmap needs.
-type Quote struct {
-	Symbol        string
-	Price         float64
-	ChangePercent float64
-	MarketCap     float64
 }
 
 // Change holds percentage changes per period. A nil value means the period is
@@ -88,11 +82,6 @@ type Heatmap struct {
 
 type ConstituentLister interface {
 	ListConstituents(index Index) ([]Constituent, error)
-}
-
-type BatchQuoter interface {
-	// GetBatchQuotes returns quotes for the symbols it found; unknown symbols are omitted.
-	GetBatchQuotes(symbols []string) ([]Quote, error)
 }
 
 // SnapshotStore persists built heatmaps so a restart can serve the last one

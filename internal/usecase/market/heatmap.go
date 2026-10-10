@@ -18,10 +18,10 @@ import (
 	stockdomain "github.com/kanitin/stackvest/backend/internal/domain/stock"
 )
 
-// changeConcurrency bounds in-flight price-change lookups per build. The
-// provider budget is enforced by the throttled PriceChanger wired in main.go;
-// this only caps goroutines waiting on it.
-const changeConcurrency = 8
+// fetchConcurrency bounds in-flight per-symbol lookups (profile + price change)
+// per build. The provider budget is enforced by the throttled decorators wired
+// in main.go; this only caps goroutines waiting on them.
+const fetchConcurrency = 8
 
 // otherSector groups constituents the provider returns without a sector.
 const otherSector = "Other"
@@ -35,11 +35,12 @@ type EventKind int
 const (
 	// EventStarted: a build of Index began; Symbols is its constituent count.
 	EventStarted EventKind = iota
-	// EventProgress: a build is still running; Done of Symbols multi-period
-	// lookups have finished.
+	// EventProgress: a build is still running; Done of Symbols have been
+	// looked up (profile and price change).
 	EventProgress
-	// EventBuilt: Index was built and published with Stocks tiles. MissingChanges
-	// symbols got no 1W/1M/YTD change; FirstChangeErr is one of those errors.
+	// EventBuilt: Index was built and published with Stocks tiles.
+	// MissingProfiles symbols were left out (no profile or market cap) and
+	// MissingChanges tiles have no period changes; SampleErr is one such error.
 	EventBuilt
 	// EventFailed: the build of Index failed with Err. ServingPrevious says
 	// whether an older snapshot is still being served.
@@ -55,8 +56,9 @@ type Event struct {
 	Symbols         int
 	Done            int
 	Stocks          int
+	MissingProfiles int
 	MissingChanges  int
-	FirstChangeErr  error
+	SampleErr       error
 	Elapsed         time.Duration
 	ServingPrevious bool
 	Err             error
@@ -70,12 +72,12 @@ type indexState struct {
 }
 
 type HeatmapUseCase struct {
-	lister  domain.ConstituentLister
-	quoter  domain.BatchQuoter
-	changer stockdomain.PriceChanger
-	store   domain.SnapshotStore // optional; nil keeps snapshots in memory only
-	onEvent func(Event)          // optional; nil discards events
-	now     func() time.Time
+	lister   domain.ConstituentLister
+	profiles stockdomain.ProfileFetcher
+	changer  stockdomain.PriceChanger
+	store    domain.SnapshotStore // optional; nil keeps snapshots in memory only
+	onEvent  func(Event)          // optional; nil discards events
+	now      func() time.Time
 
 	progressEvery time.Duration
 
@@ -84,10 +86,12 @@ type HeatmapUseCase struct {
 	states    map[domain.Index]*indexState
 }
 
-func NewHeatmapUseCase(lister domain.ConstituentLister, quoter domain.BatchQuoter, changer stockdomain.PriceChanger) *HeatmapUseCase {
+// NewHeatmapUseCase builds maps from index members (lister), each member's
+// profile (name, sector, market cap, price) and its price changes.
+func NewHeatmapUseCase(lister domain.ConstituentLister, profiles stockdomain.ProfileFetcher, changer stockdomain.PriceChanger) *HeatmapUseCase {
 	return &HeatmapUseCase{
 		lister:        lister,
-		quoter:        quoter,
+		profiles:      profiles,
 		changer:       changer,
 		now:           time.Now,
 		progressEvery: defaultProgressEvery,
@@ -202,7 +206,8 @@ func (uc *HeatmapUseCase) Refresh(ctx context.Context) error {
 		uc.setState(idx, false, nil)
 		uc.emit(Event{
 			Kind: EventBuilt, Index: idx, Symbols: stats.symbols, Stocks: stats.stocks,
-			MissingChanges: stats.missingChanges, FirstChangeErr: stats.firstChangeErr, Elapsed: uc.now().Sub(start),
+			MissingProfiles: stats.missingProfiles, MissingChanges: stats.missingChanges, SampleErr: stats.sampleErr,
+			Elapsed: uc.now().Sub(start),
 		})
 		if uc.store != nil {
 			// The snapshot is already served from memory; a failed save only
@@ -218,10 +223,17 @@ func (uc *HeatmapUseCase) Refresh(ctx context.Context) error {
 
 // buildStats summarises a successful build for its EventBuilt.
 type buildStats struct {
-	symbols        int
-	stocks         int
-	missingChanges int
-	firstChangeErr error
+	symbols         int
+	stocks          int
+	missingProfiles int
+	missingChanges  int
+	sampleErr       error
+}
+
+// lookup is what one symbol's fetch produced; either part may be missing.
+type lookup struct {
+	profile *stockdomain.CompanyProfile
+	change  *stockdomain.PriceChange
 }
 
 func (uc *HeatmapUseCase) build(ctx context.Context, index domain.Index, start time.Time) (*domain.Heatmap, buildStats, error) {
@@ -237,53 +249,55 @@ func (uc *HeatmapUseCase) build(ctx context.Context, index domain.Index, start t
 	stats.symbols = len(symbols)
 	uc.emit(Event{Kind: EventStarted, Index: index, Symbols: len(symbols)})
 
-	quoteList, err := uc.quoter.GetBatchQuotes(symbols)
-	if err != nil {
-		return nil, stats, fmt.Errorf("quotes: %w", err)
-	}
-	quotes := make(map[string]domain.Quote, len(quoteList))
-	for _, q := range quoteList {
-		quotes[q.Symbol] = q
-	}
-
-	changes, firstChangeErr, err := uc.priceChanges(ctx, index, start, symbols)
+	lookups, sampleErr, err := uc.fetch(ctx, index, start, symbols)
 	if err != nil {
 		return nil, stats, err
 	}
-	stats.missingChanges = len(symbols) - len(changes)
-	stats.firstChangeErr = firstChangeErr
+	stats.sampleErr = sampleErr
 
 	bySector := make(map[string]*domain.Sector)
-	for _, c := range constituents {
-		q, ok := quotes[c.Symbol]
-		if !ok || q.MarketCap <= 0 {
-			continue // without a market cap the tile has no size
+	for i, c := range constituents {
+		p, pc := lookups[i].profile, lookups[i].change
+		if p == nil || p.MarketCap <= 0 {
+			stats.missingProfiles++ // without a market cap the tile has no size
+			continue
 		}
-		name := c.Sector
+		// The provider's own lists carry these; the bundled lists do not.
+		name, sectorName, subSector := c.Name, c.Sector, c.SubSector
 		if name == "" {
-			name = otherSector
+			name = p.CompanyName
 		}
-		sec, ok := bySector[name]
+		if sectorName == "" {
+			sectorName = p.Sector
+		}
+		if subSector == "" {
+			subSector = p.Industry
+		}
+		if sectorName == "" {
+			sectorName = otherSector
+		}
+		sec, ok := bySector[sectorName]
 		if !ok {
-			sec = &domain.Sector{Name: name}
-			bySector[name] = sec
+			sec = &domain.Sector{Name: sectorName}
+			bySector[sectorName] = sec
 		}
-		d1 := q.ChangePercent
-		change := domain.Change{D1: &d1}
-		if pc := changes[c.Symbol]; pc != nil {
+		var change domain.Change
+		if pc != nil {
 			// Copies, so the snapshot never aliases a cached PriceChange.
-			w1, m1, ytd := pc.D5, pc.M1, pc.YTD
-			change.W1, change.M1, change.YTD = &w1, &m1, &ytd
+			d1, w1, m1, ytd := pc.D1, pc.D5, pc.M1, pc.YTD
+			change = domain.Change{D1: &d1, W1: &w1, M1: &m1, YTD: &ytd}
+		} else {
+			stats.missingChanges++
 		}
 		sec.Stocks = append(sec.Stocks, domain.Stock{
 			Symbol:    c.Symbol,
-			Name:      c.Name,
-			SubSector: c.SubSector,
-			MarketCap: q.MarketCap,
-			Price:     q.Price,
+			Name:      name,
+			SubSector: subSector,
+			MarketCap: p.MarketCap,
+			Price:     p.Price,
 			Change:    change,
 		})
-		sec.MarketCap += q.MarketCap
+		sec.MarketCap += p.MarketCap
 		stats.stocks++
 	}
 
@@ -297,14 +311,18 @@ func (uc *HeatmapUseCase) build(ctx context.Context, index domain.Index, start t
 	return &domain.Heatmap{Index: index, UpdatedAt: uc.now().UTC(), Sectors: sectors}, stats, nil
 }
 
-// priceChanges looks up the multi-period changes for each symbol. A symbol whose
-// lookup fails is left out (its tile shows only the 1D change) rather than
-// failing the whole map; the first such error is returned for logging. While
-// it runs it emits EventProgress every progressEvery.
-func (uc *HeatmapUseCase) priceChanges(ctx context.Context, index domain.Index, start time.Time, symbols []string) (changes map[string]*stockdomain.PriceChange, sampleErr, err error) {
-	results := make([]*stockdomain.PriceChange, len(symbols))
+// fetch looks up each symbol's profile and price change. A failed lookup leaves
+// that part nil (the caller skips the stock or leaves its periods empty) rather
+// than failing the whole map; one such error is returned as a sample for
+// logging. While it runs it emits EventProgress every progressEvery.
+func (uc *HeatmapUseCase) fetch(ctx context.Context, index domain.Index, start time.Time, symbols []string) (lookups []lookup, sampleErr, err error) {
+	results := make([]lookup, len(symbols))
 	var done atomic.Int64
 	var firstErr atomic.Pointer[error]
+	record := func(sym string, err error) {
+		err = fmt.Errorf("%s: %w", sym, err)
+		firstErr.CompareAndSwap(nil, &err)
+	}
 
 	stop := make(chan struct{})
 	defer close(stop)
@@ -322,7 +340,7 @@ func (uc *HeatmapUseCase) priceChanges(ctx context.Context, index domain.Index, 
 	}()
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(changeConcurrency)
+	g.SetLimit(fetchConcurrency)
 	for i, sym := range symbols {
 		if gctx.Err() != nil {
 			break
@@ -331,14 +349,18 @@ func (uc *HeatmapUseCase) priceChanges(ctx context.Context, index domain.Index, 
 			if gctx.Err() != nil {
 				return gctx.Err()
 			}
-			pc, err := uc.changer.GetPriceChange(sym)
+			defer done.Add(1)
+			p, err := uc.profiles.GetProfile(sym)
 			if err != nil {
-				err = fmt.Errorf("%s: %w", sym, err)
-				firstErr.CompareAndSwap(nil, &err)
-			} else {
-				results[i] = pc
+				record(sym, fmt.Errorf("profile: %w", err))
+				return nil // no size, so skip the price change too
 			}
-			done.Add(1)
+			results[i].profile = p
+			if pc, err := uc.changer.GetPriceChange(sym); err != nil {
+				record(sym, fmt.Errorf("price change: %w", err))
+			} else {
+				results[i].change = pc
+			}
 			return nil
 		})
 	}
@@ -348,15 +370,8 @@ func (uc *HeatmapUseCase) priceChanges(ctx context.Context, index domain.Index, 
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	out := make(map[string]*stockdomain.PriceChange, len(symbols))
-	for i, pc := range results {
-		if pc != nil {
-			out[symbols[i]] = pc
-		}
-	}
-	var sample error
 	if p := firstErr.Load(); p != nil {
-		sample = *p
+		sampleErr = *p
 	}
-	return out, sample, nil
+	return results, sampleErr, nil
 }

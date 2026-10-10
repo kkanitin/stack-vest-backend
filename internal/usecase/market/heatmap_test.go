@@ -22,16 +22,13 @@ func (f *fakeLister) ListConstituents(index domain.Index) ([]domain.Constituent,
 	return f.byIndex[index], f.err
 }
 
-type fakeQuoter struct{ quotes map[string]domain.Quote }
+type fakeProfiles map[string]*stockdomain.CompanyProfile
 
-func (f *fakeQuoter) GetBatchQuotes(symbols []string) ([]domain.Quote, error) {
-	var out []domain.Quote
-	for _, s := range symbols {
-		if q, ok := f.quotes[s]; ok {
-			out = append(out, q)
-		}
+func (f fakeProfiles) GetProfile(symbol string) (*stockdomain.CompanyProfile, error) {
+	if p, ok := f[symbol]; ok {
+		return p, nil
 	}
-	return out, nil
+	return nil, stockdomain.ErrSymbolNotFound
 }
 
 type fakeChanger struct{ failing map[string]bool }
@@ -40,18 +37,18 @@ func (f *fakeChanger) GetPriceChange(symbol string) (*stockdomain.PriceChange, e
 	if f.failing[symbol] {
 		return nil, errors.New("boom")
 	}
-	return &stockdomain.PriceChange{Symbol: symbol, D5: 2, M1: 3, YTD: 4}, nil
+	return &stockdomain.PriceChange{Symbol: symbol, D1: 1, D5: 2, M1: 3, YTD: 4}, nil
 }
 
 func newTestUC(lister *fakeLister) *HeatmapUseCase {
-	quoter := &fakeQuoter{quotes: map[string]domain.Quote{
-		"AAPL": {Symbol: "AAPL", Price: 200, ChangePercent: 1, MarketCap: 3000},
-		"MSFT": {Symbol: "MSFT", Price: 400, ChangePercent: -1, MarketCap: 3500},
-		"JPM":  {Symbol: "JPM", Price: 150, ChangePercent: 0.5, MarketCap: 500},
+	profiles := fakeProfiles{
+		"AAPL": {Symbol: "AAPL", CompanyName: "Apple Inc.", Sector: "Technology", Industry: "Consumer Electronics", Price: 200, MarketCap: 3000},
+		"MSFT": {Symbol: "MSFT", CompanyName: "Microsoft", Sector: "Technology", Price: 400, MarketCap: 3500},
+		"JPM":  {Symbol: "JPM", CompanyName: "JPMorgan", Sector: "Financial Services", Price: 150, MarketCap: 500},
 		"ZERO": {Symbol: "ZERO", Price: 1, MarketCap: 0},
 		"ODD":  {Symbol: "ODD", Price: 1, MarketCap: 10},
-	}}
-	return NewHeatmapUseCase(lister, quoter, &fakeChanger{failing: map[string]bool{"JPM": true}})
+	}
+	return NewHeatmapUseCase(lister, profiles, &fakeChanger{failing: map[string]bool{"JPM": true}})
 }
 
 func TestGetBeforeRefreshIsNotReady(t *testing.T) {
@@ -95,12 +92,12 @@ func TestRefreshGroupsAndSorts(t *testing.T) {
 	}
 
 	msft := tech.Stocks[0].Change
-	if *msft.D1 != -1 || *msft.W1 != 2 || *msft.M1 != 3 || *msft.YTD != 4 {
+	if *msft.D1 != 1 || *msft.W1 != 2 || *msft.M1 != 3 || *msft.YTD != 4 {
 		t.Errorf("unexpected MSFT change %+v", msft)
 	}
 	jpm := hm.Sectors[1].Stocks[0].Change
-	if jpm.D1 == nil || *jpm.D1 != 0.5 || jpm.W1 != nil || jpm.YTD != nil {
-		t.Errorf("failed price change should leave only 1D: %+v", jpm)
+	if jpm.D1 != nil || jpm.W1 != nil || jpm.M1 != nil || jpm.YTD != nil {
+		t.Errorf("failed price change should leave every period empty: %+v", jpm)
 	}
 }
 
@@ -271,7 +268,7 @@ func TestRefreshEmitsEvents(t *testing.T) {
 		t.Fatalf("events = %v, want %v", got, want)
 	}
 	built := log.events[1]
-	if built.Index != domain.IndexDow30 || built.Stocks != 2 || built.MissingChanges != 1 || built.FirstChangeErr == nil {
+	if built.Index != domain.IndexDow30 || built.Stocks != 2 || built.MissingChanges != 1 || built.MissingProfiles != 0 || built.SampleErr == nil {
 		t.Errorf("unexpected built event %+v", built)
 	}
 }
@@ -307,9 +304,9 @@ func TestBuildReportsProgressAndWaitingState(t *testing.T) {
 	lister := &fakeLister{byIndex: map[domain.Index][]domain.Constituent{
 		domain.IndexDow30: {{Symbol: "AAPL", Sector: "Technology"}},
 	}}
-	quoter := &fakeQuoter{quotes: map[string]domain.Quote{"AAPL": {Symbol: "AAPL", MarketCap: 1}}}
+	profiles := fakeProfiles{"AAPL": {Symbol: "AAPL", MarketCap: 1}}
 	log := &eventLog{}
-	uc := NewHeatmapUseCase(lister, quoter, slowChanger{delay: 80 * time.Millisecond}).WithEvents(log.add)
+	uc := NewHeatmapUseCase(lister, profiles, slowChanger{delay: 80 * time.Millisecond}).WithEvents(log.add)
 	uc.progressEvery = 10 * time.Millisecond
 
 	done := make(chan error)
@@ -332,5 +329,29 @@ func TestBuildReportsProgressAndWaitingState(t *testing.T) {
 	}
 	if progress == 0 {
 		t.Error("expected at least one progress event during the slow build")
+	}
+}
+
+func TestBundledListsTakeNameAndSectorFromProfile(t *testing.T) {
+	// The bundled lists carry symbols only.
+	lister := &fakeLister{byIndex: map[domain.Index][]domain.Constituent{
+		domain.IndexDow30: {{Symbol: "AAPL"}, {Symbol: "JPM"}, {Symbol: "DELISTED"}},
+	}}
+	log := &eventLog{}
+	uc := newTestUC(lister).WithEvents(log.add)
+	if err := uc.Refresh(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	hm, _ := uc.Get(domain.IndexDow30)
+	if len(hm.Sectors) != 2 || hm.Sectors[0].Name != "Technology" || hm.Sectors[1].Name != "Financial Services" {
+		t.Fatalf("sectors should come from profiles: %+v", hm.Sectors)
+	}
+	aapl := hm.Sectors[0].Stocks[0]
+	if aapl.Name != "Apple Inc." || aapl.SubSector != "Consumer Electronics" || aapl.Price != 200 || aapl.MarketCap != 3000 {
+		t.Errorf("unexpected stock %+v", aapl)
+	}
+	built := log.events[1]
+	if built.Kind != EventBuilt || built.Stocks != 2 || built.MissingProfiles != 1 || built.MissingChanges != 1 {
+		t.Errorf("unexpected built event %+v", built)
 	}
 }

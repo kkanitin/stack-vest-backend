@@ -19,7 +19,7 @@ feature-specific rules and gotchas. Repo-wide conventions live in the [documenta
 | [DCA simulator](./dca.md)                        | `POST /dca/{simulate,compare,holdings}`                                               | protected | `domain/dca`, `usecase/dca`, `infrastructure/cached`            |
 | [Market sentiment](./sentiment.md)               | `GET /sentiment`                                                                      | protected | `domain/sentiment`, `usecase/sentiment`                         |
 | [Dividend calendar](./dividend.md)               | `GET /dividends/calendar`                                                             | protected | `usecase/dividend`, `repository/dividend` (Redis)               |
-| [Market heatmap](./market-heatmap.md)            | `GET /market/heatmap`                                                                 | protected | `domain/market`, `usecase/market`, `repository/market` (Redis), `infrastructure/fmp`, `infrastructure/throttled`, `pkg/worker` |
+| [Market heatmap](./market-heatmap.md)            | `GET /market/heatmap`                                                                 | protected | `domain/market`, `usecase/market`, `repository/market` (Redis), `infrastructure/{fmp,constituents,cached,throttled}`, `pkg/worker` |
 
 `GET /health` (outside `/api/v1`, public) is infrastructure, not a feature. It keeps its own `{"message": "ready"}`
 response shape.

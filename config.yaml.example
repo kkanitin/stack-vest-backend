@@ -54,8 +54,8 @@ market:
   heatmap:
     # Index heatmaps (S&P 500, Nasdaq 100, Dow 30) are rebuilt in the background on this interval.
     refresh_minutes: 5
-    # How long a symbol's 1W/1M/YTD change is reused before it is fetched again.
-    change_ttl_minutes: 30
-    # Cap on FMP price-change calls per minute made by the refresh. Keep it well under your
-    # plan's limit (Starter: 300/min) so interactive requests still have budget.
-    change_calls_per_minute: 150
+    # How long a symbol's 1D/1W/1M/YTD change is reused before it is fetched again (tile colour freshness).
+    change_ttl_minutes: 10
+    # Cap on FMP calls per minute (company profiles + price changes) made by the refresh. Keep it well
+    # under your plan's limit (Starter: 300/min) so interactive requests still have budget.
+    calls_per_minute: 150

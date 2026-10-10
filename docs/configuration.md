@@ -27,8 +27,8 @@ All config values can be overridden at runtime via environment variables. The na
 | `PORTFOLIO_MAX_POSITIONS_PER_PORTFOLIO` | `portfolio.max_positions_per_portfolio` | `20`    |
 | `PORTFOLIO_BENCHMARKS`                  | `portfolio.benchmarks`                  | `SPY=S&P 500`, `QQQ=Nasdaq 100`, `VT=Total world` |
 | `MARKET_HEATMAP_REFRESH_MINUTES`        | `market.heatmap.refresh_minutes`        | `5`     |
-| `MARKET_HEATMAP_CHANGE_TTL_MINUTES`     | `market.heatmap.change_ttl_minutes`     | `30`    |
-| `MARKET_HEATMAP_CHANGE_CALLS_PER_MINUTE`| `market.heatmap.change_calls_per_minute`| `150`   |
+| `MARKET_HEATMAP_CHANGE_TTL_MINUTES`     | `market.heatmap.change_ttl_minutes`     | `10`    |
+| `MARKET_HEATMAP_CALLS_PER_MINUTE`       | `market.heatmap.calls_per_minute`       | `150`   |
 
 Env vars take precedence over `config.yaml`. In production, set secrets via env vars and omit them from `config.yaml`
 entirely. Feature-specific config keys (e.g. per-feature limits) are documented in the relevant feature doc.

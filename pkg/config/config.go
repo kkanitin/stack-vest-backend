@@ -65,10 +65,10 @@ type Config struct {
 		Heatmap struct {
 			// RefreshMinutes is how often the index heatmaps are rebuilt.
 			RefreshMinutes int `yaml:"refresh_minutes"`
-			// ChangeTTLMinutes is how long a symbol's 1W/1M/YTD change is reused.
+			// ChangeTTLMinutes is how long a symbol's 1D/1W/1M/YTD change is reused.
 			ChangeTTLMinutes int `yaml:"change_ttl_minutes"`
-			// ChangeCallsPerMinute caps the FMP price-change calls the refresh makes.
-			ChangeCallsPerMinute int `yaml:"change_calls_per_minute"`
+			// CallsPerMinute caps the FMP calls (profiles and price changes) the refresh makes.
+			CallsPerMinute int `yaml:"calls_per_minute"`
 		} `yaml:"heatmap"`
 	} `yaml:"market"`
 }
@@ -90,8 +90,8 @@ func Load() *Config {
 	cfg.Portfolio.MaxPositionsPerPortfolio = 20
 	cfg.Portfolio.Benchmarks = []string{"SPY=S&P 500", "QQQ=Nasdaq 100", "VT=Total world"}
 	cfg.Market.Heatmap.RefreshMinutes = 5
-	cfg.Market.Heatmap.ChangeTTLMinutes = 30
-	cfg.Market.Heatmap.ChangeCallsPerMinute = 150
+	cfg.Market.Heatmap.ChangeTTLMinutes = 10
+	cfg.Market.Heatmap.CallsPerMinute = 150
 
 	if data, err := os.ReadFile("config.yaml"); err == nil {
 		_ = yaml.Unmarshal(data, cfg)
