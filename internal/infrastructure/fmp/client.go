@@ -10,6 +10,7 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,6 +32,10 @@ type Client struct {
 	// treated as truncated (see GetDividendsCalendar). Zero means
 	// defaultCalendarRowCap; tests lower it to exercise the splitting.
 	calendarRowCap int
+
+	// batchQuoteRestricted is set once /batch-quote answers that it is not on
+	// the plan, so GetBatchQuotes stops trying it (see market.go).
+	batchQuoteRestricted atomic.Bool
 }
 
 func NewClient(apiKey string) *Client {

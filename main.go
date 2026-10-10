@@ -18,6 +18,7 @@ import (
 	"github.com/kanitin/stackvest/backend/internal/infrastructure/cached"
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
 	groq "github.com/kanitin/stackvest/backend/internal/infrastructure/groq"
+	"github.com/kanitin/stackvest/backend/internal/infrastructure/throttled"
 	dividendrepo "github.com/kanitin/stackvest/backend/internal/repository/dividend"
 	portfoliorepo "github.com/kanitin/stackvest/backend/internal/repository/portfolio"
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
@@ -26,6 +27,7 @@ import (
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 	dcauc "github.com/kanitin/stackvest/backend/internal/usecase/dca"
 	dividenduc "github.com/kanitin/stackvest/backend/internal/usecase/dividend"
+	marketuc "github.com/kanitin/stackvest/backend/internal/usecase/market"
 	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
 	sentimentuc "github.com/kanitin/stackvest/backend/internal/usecase/sentiment"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
@@ -160,9 +162,35 @@ func main() {
 	dividendUC := dividenduc.NewCalendarUseCase(userRepo, portfolioRepo, avClient, dividendCache).WithLedger(portfolioRepo)
 	dividendHandler := handler.NewDividendHandler(dividendUC)
 
+	// Index heatmaps: rebuilt in the background and served from memory (see
+	// docs/features/market-heatmap.md). The 1W/1M/YTD changes have their own long-lived
+	// cache, and its misses are throttled so a rebuild of ~500 symbols stays inside the
+	// FMP per-minute budget that interactive requests share.
+	hmCfg := cfg.Market.Heatmap
+	// A zero interval would panic the ticker and a zero rate would block forever.
+	hmCfg.RefreshMinutes = max(hmCfg.RefreshMinutes, 1)
+	hmCfg.ChangeCallsPerMinute = max(hmCfg.ChangeCallsPerMinute, 1)
+	heatmapChanger := cached.NewPriceChanger(
+		throttled.NewPriceChanger(avClient, hmCfg.ChangeCallsPerMinute),
+		time.Duration(hmCfg.ChangeTTLMinutes)*time.Minute,
+	)
+	heatmapUC := marketuc.NewHeatmapUseCase(cached.NewConstituentLister(avClient, 24*time.Hour), avClient, heatmapChanger)
+	heatmapJob := worker.StartPeriodic(time.Duration(hmCfg.RefreshMinutes)*time.Minute, func(ctx context.Context) {
+		err := heatmapUC.Refresh(ctx)
+		if errors.Is(err, context.Canceled) {
+			return // shutting down mid-run
+		}
+		if err != nil {
+			zap.L().Error("heatmap refresh failed", zap.Error(err))
+			return
+		}
+		zap.L().Info("heatmap refreshed")
+	})
+	marketHandler := handler.NewMarketHandler(heatmapUC)
+
 	healthHandler := handler.NewHealthHandler(pool)
 
-	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, sentimentHandler, dividendHandler, healthHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
+	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, sentimentHandler, dividendHandler, marketHandler, healthHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Server.Port,
@@ -178,6 +206,7 @@ func main() {
 		// Before pool.Close(): the job writes through the pool, so it must have
 		// stopped (or been abandoned at the deadline) before the pool goes away.
 		valueSnapshotJob.Stop,
+		heatmapJob.Stop,
 		func(_ context.Context) {
 			pool.Close()
 		},

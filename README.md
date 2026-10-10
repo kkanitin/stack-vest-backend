@@ -18,6 +18,7 @@ external services stay confined to the outer layers.
 - **Dividend calendar** — past and upcoming ex-dividend/payment dates, cached in Redis
 - **Stock data** — search, quotes, price changes, history, and company profiles via [FMP](https://financialmodelingprep.com)
 - **Market sentiment** and **popular stocks** endpoints
+- **Index heatmap** — every S&P 500, Nasdaq 100 or Dow 30 constituent grouped by sector with market cap and 1D/1W/1M/YTD change, rebuilt in the background
 - **Rate limiting** — token-bucket, keyed per-IP for public routes and per-user for authenticated ones
 - **Consistent API contract** — standard response envelope, `lowerCamelCase` JSON, and uniform pagination across all list endpoints
 - **Operational polish** — structured JSON logging (`zap`), graceful shutdown, and automatic DB migrations on startup
@@ -90,6 +91,7 @@ open; everything else requires a valid JWT (`Authorization: Bearer <token>`).
 | POST   | `/api/v1/dca/simulate`                        | JWT     | Simulate a DCA strategy                      |
 | GET    | `/api/v1/sentiment`                           | JWT     | Market sentiment                             |
 | GET    | `/api/v1/dividends/calendar`                  | JWT     | Dividend calendar (Redis-cached)             |
+| GET    | `/api/v1/market/heatmap`                      | JWT     | Index heatmap (S&P 500 / Nasdaq 100 / Dow 30) |
 | POST   | `/api/v1/portfolios`                          | JWT     | Create a portfolio                           |
 | GET    | `/api/v1/portfolios`                          | JWT     | List portfolios                              |
 | GET    | `/api/v1/portfolios/summary`                  | JWT     | Aggregate summary across portfolios          |
@@ -132,6 +134,7 @@ Key settings:
 | `REDIS_ADDR`                    | —       | Redis host:port (dividend cache)   |
 | `THIRD_PARTY_API_FMP_API_KEY`   | —       | Financial Modeling Prep API key    |
 | `THIRD_PARTY_API_GROQ_API_KEY`  | —       | Groq API key (AI analysis)         |
+| `MARKET_HEATMAP_REFRESH_MINUTES`| `5`     | Index heatmap rebuild interval     |
 
 See [docs/configuration.md](./docs/configuration.md) for the complete list.
 

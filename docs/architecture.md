@@ -34,8 +34,9 @@ pkg/
 ## Background jobs
 
 `worker.StartPeriodic(interval, fn)` runs `fn` once at start and then on the interval, never overlapping, and passes
-it a context that is cancelled on shutdown. Jobs are started in `main.go` next to the use case they call. The only
-job today is the three-hourly value snapshot (see [features/portfolio.md](./features/portfolio.md#value-snapshots)).
+it a context that is cancelled on shutdown. Jobs are started in `main.go` next to the use case they call. There are two
+jobs: the three-hourly value snapshot (see [features/portfolio.md](./features/portfolio.md#value-snapshots)) and the
+index heatmap refresh (see [features/market-heatmap.md](./features/market-heatmap.md)).
 
 A job has no request, so it logs its own outcome in the `main.go` callback: one `Error` on failure, one `Info` on
 success.

@@ -19,6 +19,7 @@ feature-specific rules and gotchas. Repo-wide conventions live in the [documenta
 | [DCA simulator](./dca.md)                        | `POST /dca/{simulate,compare,holdings}`                                               | protected | `domain/dca`, `usecase/dca`, `infrastructure/cached`            |
 | [Market sentiment](./sentiment.md)               | `GET /sentiment`                                                                      | protected | `domain/sentiment`, `usecase/sentiment`                         |
 | [Dividend calendar](./dividend.md)               | `GET /dividends/calendar`                                                             | protected | `usecase/dividend`, `repository/dividend` (Redis)               |
+| [Market heatmap](./market-heatmap.md)            | `GET /market/heatmap`                                                                 | protected | `domain/market`, `usecase/market`, `infrastructure/fmp`, `infrastructure/throttled`, `pkg/worker` |
 
 `GET /health` (outside `/api/v1`, public) is infrastructure, not a feature. It keeps its own `{"message": "ready"}`
 response shape.
@@ -30,7 +31,7 @@ response shape.
 - **Holdings:** dividend and portfolio analysis read positions from the portfolio repository and use case. The dividend
   calendar also reads the portfolio transaction ledger (`ListTransactionsByUser`) for the shares held at past ex-dates.
 - **Daily closes:** portfolio benchmarks and time-weighted returns share the cached `HistoryCloser` (see [stock.md](./stock.md)).
-- **FMP client** (`infrastructure/fmp`) is used by stock, popular, watchlist (symbol validation), DCA, sentiment and dividend.
+- **FMP client** (`infrastructure/fmp`) is used by stock, popular, watchlist (symbol validation), DCA, sentiment, dividend and market heatmap.
 
 ## Adding or changing a feature
 
