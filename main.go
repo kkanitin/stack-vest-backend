@@ -116,7 +116,9 @@ func main() {
 	watchlistUC := watchlistuc.NewWatchlistUseCase(watchlistRepo, userRepo, avClient)
 	watchlistHandler := handler.NewWatchlistHandler(watchlistUC)
 
-	dcaSimulatorUC := dcauc.NewSimulatorUseCase(avClient)
+	// Adjusted closes for the simulator: reused for 6 hours per symbol and range, so tweaking
+	// the amount or frequency does not hit the provider again (see docs/features/dca.md).
+	dcaSimulatorUC := dcauc.NewSimulatorUseCase(cached.NewDCAPrices(avClient, 6*time.Hour))
 	dcaHandler := handler.NewDCAHandler(dcaSimulatorUC)
 
 	groqClient := groq.NewClient(cfg.ThirdPartyAPI.Groq.APIKey)
