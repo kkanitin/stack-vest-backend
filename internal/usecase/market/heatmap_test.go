@@ -3,7 +3,11 @@ package marketuc
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	domain "github.com/kanitin/stackvest/backend/internal/domain/market"
 	stockdomain "github.com/kanitin/stackvest/backend/internal/domain/stock"
@@ -225,5 +229,108 @@ func TestRefreshPublishesWhenSaveFails(t *testing.T) {
 	}
 	if _, err := uc.Get(domain.IndexDow30); err != nil {
 		t.Errorf("snapshot should still be served after a failed save: %v", err)
+	}
+}
+
+type eventLog struct {
+	mu     sync.Mutex
+	events []Event
+}
+
+func (l *eventLog) add(e Event) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, e)
+}
+
+func (l *eventLog) kinds() []EventKind {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []EventKind
+	for _, e := range l.events {
+		if e.Kind != EventProgress {
+			out = append(out, e.Kind)
+		}
+	}
+	return out
+}
+
+func TestRefreshEmitsEvents(t *testing.T) {
+	lister := &fakeLister{byIndex: map[domain.Index][]domain.Constituent{
+		domain.IndexDow30: {{Symbol: "AAPL", Sector: "Technology"}, {Symbol: "JPM", Sector: "Financials"}},
+	}}
+	log := &eventLog{}
+	uc := newTestUC(lister).WithEvents(log.add)
+	if err := uc.Refresh(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Dow 30 builds; the other two indexes have no constituents but still build (empty maps).
+	want := []EventKind{EventStarted, EventBuilt, EventStarted, EventBuilt, EventStarted, EventBuilt}
+	if got := log.kinds(); !slices.Equal(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+	built := log.events[1]
+	if built.Index != domain.IndexDow30 || built.Stocks != 2 || built.MissingChanges != 1 || built.FirstChangeErr == nil {
+		t.Errorf("unexpected built event %+v", built)
+	}
+}
+
+func TestFailedBuildIsUnavailableNotWaiting(t *testing.T) {
+	lister := &fakeLister{err: errors.New("upstream down")}
+	log := &eventLog{}
+	uc := newTestUC(lister).WithEvents(log.add)
+
+	if _, err := uc.Get(domain.IndexSP500); !errors.Is(err, domain.ErrHeatmapNotReady) {
+		t.Fatalf("before any build: expected ErrHeatmapNotReady, got %v", err)
+	}
+	if err := uc.Refresh(context.Background()); err == nil {
+		t.Fatal("expected an error")
+	}
+	_, err := uc.Get(domain.IndexSP500)
+	if !errors.Is(err, domain.ErrHeatmapUnavailable) || !strings.Contains(err.Error(), "upstream down") {
+		t.Fatalf("after a failed build: expected ErrHeatmapUnavailable wrapping the cause, got %v", err)
+	}
+	if k := log.kinds(); len(k) != 3 || k[0] != EventFailed || log.events[0].ServingPrevious {
+		t.Errorf("expected three EventFailed without a previous snapshot, got %+v", log.events)
+	}
+}
+
+type slowChanger struct{ delay time.Duration }
+
+func (s slowChanger) GetPriceChange(symbol string) (*stockdomain.PriceChange, error) {
+	time.Sleep(s.delay)
+	return &stockdomain.PriceChange{Symbol: symbol}, nil
+}
+
+func TestBuildReportsProgressAndWaitingState(t *testing.T) {
+	lister := &fakeLister{byIndex: map[domain.Index][]domain.Constituent{
+		domain.IndexDow30: {{Symbol: "AAPL", Sector: "Technology"}},
+	}}
+	quoter := &fakeQuoter{quotes: map[string]domain.Quote{"AAPL": {Symbol: "AAPL", MarketCap: 1}}}
+	log := &eventLog{}
+	uc := NewHeatmapUseCase(lister, quoter, slowChanger{delay: 80 * time.Millisecond}).WithEvents(log.add)
+	uc.progressEvery = 10 * time.Millisecond
+
+	done := make(chan error)
+	go func() { done <- uc.Refresh(context.Background()) }()
+	time.Sleep(30 * time.Millisecond)
+	if _, err := uc.Get(domain.IndexDow30); !errors.Is(err, domain.ErrHeatmapNotReady) {
+		t.Errorf("mid-build: expected ErrHeatmapNotReady, got %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	var progress int
+	for _, e := range log.events {
+		if e.Kind == EventProgress && e.Index == domain.IndexDow30 && e.Symbols == 1 {
+			progress++
+		}
+	}
+	if progress == 0 {
+		t.Error("expected at least one progress event during the slow build")
 	}
 }

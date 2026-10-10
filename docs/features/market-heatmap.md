@@ -37,9 +37,12 @@ Response (`result`):
 - A `change` value is `null` when that period is unavailable for the symbol. `1D` is always set.
 - Errors:
   - `400` when `index` is missing or unknown.
-  - `503` with `Retry-After: 30` until a snapshot of that index exists. After a restart the last snapshots are
-    loaded from Redis, so this only happens when Redis has none (first run, Redis down, or older than 72 h). Then the
-    S&P 500 takes a few minutes to build; Dow 30 and Nasdaq 100 are ready first.
+  - `503` "heatmap is warming up" with `Retry-After: 30` while there is no snapshot yet and a build is running or
+    queued. After a restart the last snapshots are loaded from Redis, so this only happens when Redis has none (first
+    run, Redis down, or older than 72 h). Then the S&P 500 takes a few minutes to build; Dow 30 and Nasdaq 100 are
+    ready first.
+  - `503` "heatmap is temporarily unavailable" with `Retry-After: 60` when the last build of that index failed and
+    there is no older snapshot to serve. The next refresh retries it.
   - `500` for anything else.
 
 ## Code map
@@ -78,6 +81,23 @@ Response (`result`):
   30 s cache that interactive endpoints use, and it is shared across the three indexes, so an overlapping symbol
   such as AAPL is fetched once.
 
+## Logging
+
+The use case reports build events (`WithEvents`); `logHeatmapEvent` in `main.go` logs them. "Still waiting" and
+"failing" are distinct messages and levels:
+
+| Level | Message | Meaning |
+|-------|---------|---------|
+| Info  | `heatmap build started` (`index`, `symbols`) | A rebuild of one index began. |
+| Info  | `heatmap build in progress, waiting on rate-limited FMP calls` (`done`, `total`, `elapsed`, `etaUpTo`) | Every 30 s while price changes are being fetched. `done` rising means it is waiting, not stuck. |
+| Info  | `heatmap built` (`stocks`, `elapsed`) | The index is published. |
+| Warn  | `heatmap built, but some 1W/1M/YTD changes are missing` (`missingChanges`, `sampleError`) | Published, but some lookups failed (those tiles only have 1D). |
+| Error | `heatmap build failed` (`error`, `servingPrevious`) | The build failed. `servingPrevious=true` means users still get the older map. |
+| Warn  | `heatmap snapshot not saved to Redis; a restart will rebuild it` | Persistence failed; serving is unaffected. |
+| Info / Warn | `heatmap refresh finished` / `heatmap refresh finished with failures` | End of a run over all three indexes. |
+| Info  | `heatmap requested while still building` (handler, with `requestId`) | A user asked before the first snapshot existed. |
+| Error | `heatmap unavailable: last build failed` (handler, with `requestId`) | A user asked and there is nothing to serve because the build failed. |
+
 ## Rules & gotchas
 
 - **FMP budget:** a rebuild needs about 520 price-change calls when the change cache is cold. Cache misses go
@@ -91,5 +111,6 @@ Response (`result`):
 
 ## Tests
 
-`fmp/market_test.go`, `usecase/market/heatmap_test.go` (including restore/save with a fake store),
+`fmp/market_test.go`, `usecase/market/heatmap_test.go` (including restore/save with a fake store, build events, and
+waiting vs failed states),
 `handler/market_test.go`

@@ -40,9 +40,18 @@ func (h *MarketHandler) Heatmap(c *gin.Context) {
 	}
 
 	hm, err := h.heatmap.Get(domain.Index(q.Index))
-	if errors.Is(err, domain.ErrHeatmapNotReady) {
+	switch {
+	case errors.Is(err, domain.ErrHeatmapNotReady):
+		// Expected after a cold start: the background build is still running.
+		zap.L().Info("heatmap requested while still building", logger.RequestID(c.Request.Context()), zap.String("index", q.Index))
 		c.Header("Retry-After", "30")
 		response.Err(c, http.StatusServiceUnavailable, "heatmap is warming up, try again shortly")
+		return
+	case errors.Is(err, domain.ErrHeatmapUnavailable):
+		// The last build failed and there is nothing older to serve.
+		zap.L().Error("heatmap unavailable: last build failed", logger.RequestID(c.Request.Context()), zap.String("index", q.Index), zap.Error(err))
+		c.Header("Retry-After", "60")
+		response.Err(c, http.StatusServiceUnavailable, "heatmap is temporarily unavailable")
 		return
 	}
 	if err != nil {

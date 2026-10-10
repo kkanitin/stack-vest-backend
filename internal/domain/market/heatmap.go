@@ -10,8 +10,12 @@ import (
 
 var (
 	ErrUnknownIndex = errors.New("unknown index")
-	// ErrHeatmapNotReady is returned until the first snapshot of an index is built.
+	// ErrHeatmapNotReady is returned while the first snapshot of an index is still
+	// being built (or queued behind another index).
 	ErrHeatmapNotReady = errors.New("heatmap not ready")
+	// ErrHeatmapUnavailable is returned when the last build of an index failed and
+	// there is no earlier snapshot to serve; it wraps the build error.
+	ErrHeatmapUnavailable = errors.New("heatmap unavailable")
 	// ErrPlanRestricted means the market-data plan does not include an endpoint.
 	ErrPlanRestricted = errors.New("endpoint not available on the current data plan")
 )

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,6 +34,7 @@ func TestMarketHeatmap(t *testing.T) {
 		{"missing index", "", nil, nil, http.StatusBadRequest},
 		{"unknown index", "?index=ftse", nil, nil, http.StatusBadRequest},
 		{"warming up", "?index=dow30", nil, domain.ErrHeatmapNotReady, http.StatusServiceUnavailable},
+		{"last build failed", "?index=sp500", nil, fmt.Errorf("%w: boom", domain.ErrHeatmapUnavailable), http.StatusServiceUnavailable},
 		{"other error", "?index=nasdaq100", nil, errors.New("boom"), http.StatusInternalServerError},
 	}
 	for _, tc := range tests {

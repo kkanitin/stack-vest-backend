@@ -178,7 +178,8 @@ func main() {
 	// Built snapshots are also kept in Redis for 72h (long enough to span a weekend), so a
 	// restart serves the last map at once instead of 503 until the S&P 500 rebuild ends.
 	heatmapUC := marketuc.NewHeatmapUseCase(cached.NewConstituentLister(avClient, 24*time.Hour), avClient, heatmapChanger).
-		WithStore(marketrepo.NewRedisSnapshotStore(redisClient, 72*time.Hour))
+		WithStore(marketrepo.NewRedisSnapshotStore(redisClient, 72*time.Hour)).
+		WithEvents(logHeatmapEvent(hmCfg.ChangeCallsPerMinute))
 	restoreCtx, cancelRestore := context.WithTimeout(context.Background(), 3*time.Second)
 	if n, err := heatmapUC.Restore(restoreCtx); err != nil {
 		zap.L().Warn("heatmap snapshots not restored; maps rebuild from scratch", zap.Int("restored", n), zap.Error(err))
@@ -191,11 +192,12 @@ func main() {
 		if errors.Is(err, context.Canceled) {
 			return // shutting down mid-run
 		}
+		// Each failure was already logged by logHeatmapEvent; this is the run summary.
 		if err != nil {
-			zap.L().Error("heatmap refresh failed", zap.Error(err))
+			zap.L().Warn("heatmap refresh finished with failures", zap.Error(err))
 			return
 		}
-		zap.L().Info("heatmap refreshed")
+		zap.L().Info("heatmap refresh finished")
 	})
 	marketHandler := handler.NewMarketHandler(heatmapUC)
 
@@ -227,6 +229,40 @@ func main() {
 			}
 		},
 	)
+}
+
+// logHeatmapEvent logs index heatmap builds so the logs tell "still building"
+// (Info: started, progress, built) apart from "failing" (Error: build failed,
+// Warn: built with gaps or not persisted). callsPerMinute is the price-change
+// rate limit, used for a rough time-remaining estimate.
+func logHeatmapEvent(callsPerMinute int) func(marketuc.Event) {
+	return func(e marketuc.Event) {
+		idx := zap.String("index", string(e.Index))
+		switch e.Kind {
+		case marketuc.EventStarted:
+			zap.L().Info("heatmap build started", idx, zap.Int("symbols", e.Symbols))
+		case marketuc.EventProgress:
+			remaining := e.Symbols - e.Done
+			// An upper bound: cached lookups don't wait on the rate limit.
+			eta := time.Duration(float64(remaining) / float64(callsPerMinute) * float64(time.Minute)).Round(time.Second)
+			zap.L().Info("heatmap build in progress, waiting on rate-limited FMP calls", idx,
+				zap.Int("done", e.Done), zap.Int("total", e.Symbols), zap.Duration("elapsed", e.Elapsed.Round(time.Second)),
+				zap.Duration("etaUpTo", eta))
+		case marketuc.EventBuilt:
+			fields := []zap.Field{idx, zap.Int("stocks", e.Stocks), zap.Int("symbols", e.Symbols), zap.Duration("elapsed", e.Elapsed.Round(time.Second))}
+			if e.MissingChanges > 0 {
+				zap.L().Warn("heatmap built, but some 1W/1M/YTD changes are missing",
+					append(fields, zap.Int("missingChanges", e.MissingChanges), zap.NamedError("sampleError", e.FirstChangeErr))...)
+				return
+			}
+			zap.L().Info("heatmap built", fields...)
+		case marketuc.EventFailed:
+			zap.L().Error("heatmap build failed", idx, zap.Error(e.Err),
+				zap.Duration("elapsed", e.Elapsed.Round(time.Second)), zap.Bool("servingPrevious", e.ServingPrevious))
+		case marketuc.EventSaveFailed:
+			zap.L().Warn("heatmap snapshot not saved to Redis; a restart will rebuild it", idx, zap.Error(e.Err))
+		}
+	}
 }
 
 func runUntilShutdown(srv *http.Server, cleanups ...func(context.Context)) {
