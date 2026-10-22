@@ -74,6 +74,7 @@ open; everything else requires a valid JWT (`Authorization: Bearer <token>`).
 | GET    | `/api/v1/auth/google`                         | public  | Begin Google OAuth login                     |
 | GET    | `/api/v1/auth/google/callback`                | public  | OAuth callback → issues JWT                   |
 | GET    | `/api/v1/popular`                             | public  | Popular / trending stocks                    |
+| GET    | `/api/v1/health/db`                           | JWT     | Database connection pool stats               |
 | GET    | `/api/v1/users/me`                            | JWT     | Current user profile                         |
 | POST   | `/api/v1/users/me`                            | JWT     | Create/upsert current user                   |
 | GET    | `/api/v1/stocks/search`                       | JWT     | Symbol search                                |

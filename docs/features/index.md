@@ -21,7 +21,10 @@ feature-specific rules and gotchas. Repo-wide conventions live in the [documenta
 | [Dividend calendar](./dividend.md)               | `GET /dividends/calendar`                                                             | protected | `usecase/dividend`, `repository/dividend` (Redis)               |
 
 `GET /health` (outside `/api/v1`, public) is infrastructure, not a feature. It keeps its own `{"message": "ready"}`
-response shape.
+response shape and returns nothing else, since it is open to anyone (uptime monitors ping it to keep the instance
+warm). Database pool stats (`maxConns`, `totalConns`, `idleConns`, `acquireCount`, `emptyAcquireCount`,
+`acquireDurationMs`) live at the protected `GET /api/v1/health/db`, which uses the standard envelope. Both are in
+`handler/health.go`.
 
 ## Cross-feature dependencies
 
