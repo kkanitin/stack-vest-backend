@@ -45,6 +45,7 @@ func New(stockHandler *handler.StockHandler, authHandler *handler.AuthHandler, u
 	portfolioHandler.RegisterRoutes(protected)
 	sentimentHandler.RegisterRoutes(protected)
 	dividendHandler.RegisterRoutes(protected)
+	healthHandler.RegisterRoutes(protected)
 
 	return r
 }
