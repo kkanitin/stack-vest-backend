@@ -23,7 +23,7 @@ All endpoints are protected and live under `/api/v1/portfolios`.
 | GET    | `/activity`               | `limit` 1–50 (default 10)                       | newest ledger activity across all portfolios, each row with `portfolioId` and `portfolioName` · `400` bad limit |
 | GET    | `/:id`                    | —                                               | enriched portfolio · `404`                                       |
 | PATCH  | `/:id`                    | `{ name?, description? }` (at least one)        | portfolio · `404`                                                |
-| DELETE | `/:id`                    | —                                               | `204` · `404`                                                    |
+| DELETE | `/:id`                    | —                                               | `204` · `404`; linked goals keep existing with `portfolioId` cleared (see [goal.md](./goal.md)) |
 | POST   | `/:id/positions`          | `{ symbol*, name*, shares* > 0, avgCost* ≥ 0 }` | legacy wrapper, records a buy dated today · `201` position · `400` · `404` · `409` position limit |
 | GET    | `/:id/positions`          | `includeClosed` (`true`/`false`, default false) | positions enriched with live value and P&L · `400` bad `includeClosed` · `404` |
 | PATCH  | `/:id/positions/:symbol`  | any body                                        | always `410` "Holdings are now edited through their transactions." · `404` portfolio |

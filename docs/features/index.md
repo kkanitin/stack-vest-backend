@@ -18,6 +18,7 @@ feature-specific rules and gotchas. Repo-wide conventions live in the [documenta
 | [AI portfolio analysis (SSE)](./portfolio-analysis.md) | `POST /portfolios/analyze`, `POST /portfolios/:id/analyze`                      | protected | `usecase/analysis`, `infrastructure/groq`                       |
 | [DCA simulator](./dca.md)                        | `POST /dca/{simulate,compare,holdings}`                                               | protected | `domain/dca`, `usecase/dca`, `infrastructure/cached`            |
 | [Market sentiment](./sentiment.md)               | `GET /sentiment`                                                                      | protected | `domain/sentiment`, `usecase/sentiment`                         |
+| [Financial goals](./goal.md)                     | `/goals`, `/goals/:id`                                                                | protected | `domain/goal`, `usecase/goal`, `repository/goal`                |
 | [Dividend calendar](./dividend.md)               | `GET /dividends/calendar`                                                             | protected | `usecase/dividend`, `repository/dividend` (Redis)               |
 
 `GET /health` (outside `/api/v1`, public) is infrastructure, not a feature. It keeps its own `{"message": "ready"}`
@@ -28,11 +29,13 @@ warm). Database pool stats (`maxConns`, `totalConns`, `idleConns`, `acquireCount
 
 ## Cross-feature dependencies
 
-- **User lookup:** watchlist, portfolio and dividend turn the authenticated email into a user ID with `user.Repository.FindByEmail`.
+- **User lookup:** watchlist, portfolio, goal and dividend turn the authenticated email into a user ID with `user.Repository.FindByEmail`.
 - **Pricing:** portfolio uses the shared cached `Quoter` and `PriceChanger` from [stock.md](./stock.md), wrapped once in `main.go`.
 - **Holdings:** dividend and portfolio analysis read positions from the portfolio repository and use case. The dividend
   calendar also reads the portfolio transaction ledger (`ListTransactionsByUser`) for the shares held at past ex-dates.
 - **Daily closes:** portfolio benchmarks and time-weighted returns share the cached `HistoryCloser` (see [stock.md](./stock.md)).
+- **Goals → portfolios:** a goal may link to one of the user's portfolios (checked with the portfolio repository's
+  `GetPortfolio`). Deleting the portfolio clears `goals.portfolio_id` (`ON DELETE SET NULL`) and keeps the goal.
 - **FMP client** (`infrastructure/fmp`) is used by stock, popular, watchlist (symbol validation), DCA, sentiment and dividend.
 
 ## Adding or changing a feature
