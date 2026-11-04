@@ -49,3 +49,6 @@ portfolio:
     - "SPY=S&P 500"
     - "QQQ=Nasdaq 100"
     - "VT=Total world"
+
+goal:
+  max_per_user: 50                  # max saved financial goals a single user can own

@@ -19,6 +19,7 @@ import (
 	fmp "github.com/kanitin/stackvest/backend/internal/infrastructure/fmp"
 	groq "github.com/kanitin/stackvest/backend/internal/infrastructure/groq"
 	dividendrepo "github.com/kanitin/stackvest/backend/internal/repository/dividend"
+	goalrepo "github.com/kanitin/stackvest/backend/internal/repository/goal"
 	portfoliorepo "github.com/kanitin/stackvest/backend/internal/repository/portfolio"
 	userrepo "github.com/kanitin/stackvest/backend/internal/repository/user"
 	watchlistrepo "github.com/kanitin/stackvest/backend/internal/repository/watchlist"
@@ -26,6 +27,7 @@ import (
 	authuc "github.com/kanitin/stackvest/backend/internal/usecase/auth"
 	dcauc "github.com/kanitin/stackvest/backend/internal/usecase/dca"
 	dividenduc "github.com/kanitin/stackvest/backend/internal/usecase/dividend"
+	goaluc "github.com/kanitin/stackvest/backend/internal/usecase/goal"
 	portfoliouc "github.com/kanitin/stackvest/backend/internal/usecase/portfolio"
 	sentimentuc "github.com/kanitin/stackvest/backend/internal/usecase/sentiment"
 	stockuc "github.com/kanitin/stackvest/backend/internal/usecase/stock"
@@ -160,9 +162,12 @@ func main() {
 	dividendUC := dividenduc.NewCalendarUseCase(userRepo, portfolioRepo, avClient, dividendCache).WithLedger(portfolioRepo)
 	dividendHandler := handler.NewDividendHandler(dividendUC)
 
+	goalUC := goaluc.New(goalrepo.NewPostgresRepository(pool), userRepo, portfolioRepo, cfg.Goal.MaxPerUser)
+	goalHandler := handler.NewGoalHandler(goalUC)
+
 	healthHandler := handler.NewHealthHandler(pool)
 
-	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, sentimentHandler, dividendHandler, healthHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
+	r := router.New(stockHandler, authHandler, userHandler, watchlistHandler, dcaHandler, portfolioHandler, popularHandler, sentimentHandler, dividendHandler, goalHandler, healthHandler, cfg.Auth.Google.ClientID, log, cfg.CORS.AllowOrigins)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Server.Port,

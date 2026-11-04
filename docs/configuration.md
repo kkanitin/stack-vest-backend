@@ -26,6 +26,7 @@ All config values can be overridden at runtime via environment variables. The na
 | `PORTFOLIO_MAX_PER_USER`                | `portfolio.max_per_user`                | `10`    |
 | `PORTFOLIO_MAX_POSITIONS_PER_PORTFOLIO` | `portfolio.max_positions_per_portfolio` | `20`    |
 | `PORTFOLIO_BENCHMARKS`                  | `portfolio.benchmarks`                  | `SPY=S&P 500`, `QQQ=Nasdaq 100`, `VT=Total world` |
+| `GOAL_MAX_PER_USER`                     | `goal.max_per_user`                     | `50`    |
 
 Env vars take precedence over `config.yaml`. In production, set secrets via env vars and omit them from `config.yaml`
 entirely. Feature-specific config keys (e.g. per-feature limits) are documented in the relevant feature doc.

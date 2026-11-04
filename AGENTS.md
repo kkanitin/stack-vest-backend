@@ -45,9 +45,11 @@ go vet ./...
 
 ## Git Policy
 
-- **NEVER** perform `git commit` or `git push` commands.
-- Read-only commands such as `git fetch`, `git status`, `git diff`, `git log`, etc. are permitted.
-- Project modifications should only be made to files; the user will handle version control.
+- Agents may `git commit` and `git push`, but only to a feature branch named after its Jira ticket:
+  `feature/<JIRA-KEY>-<short-slug>` (e.g. `feature/KAN-15-goal-storage-api`), created from the latest `main`.
+- **NEVER** push to `main`, force-push, or rewrite history that has already been pushed.
+- Run `go build ./...`, `go vet ./...` and `go test ./...` before every commit. A commit includes its matching doc
+  updates (see Documentation).
 
 ## Architecture
 
