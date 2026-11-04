@@ -30,7 +30,8 @@ const (
 const DefaultCurrency = "USD"
 
 // Goal holds the inputs of a saved financial goal. Results are calculated by the client.
-// Percentages (expectedReturn, contributionGrowth, inflation) are annual, e.g. 7 means 7%.
+// Percentages (expectedReturn, contributionGrowth, inflation, volatility) are annual, e.g. 7
+// means 7%. Volatility is the spread the client's Monte Carlo uses; nil means not set.
 type Goal struct {
 	ID                 string    `json:"id"`
 	UserID             string    `json:"-"`
@@ -45,6 +46,7 @@ type Goal struct {
 	ExpectedReturn     float64   `json:"expectedReturn"`
 	ContributionGrowth *float64  `json:"contributionGrowth"`
 	Inflation          *float64  `json:"inflation"`
+	Volatility         *float64  `json:"volatility"`
 	CreatedAt          time.Time `json:"createdAt"`
 	UpdatedAt          time.Time `json:"updatedAt"`
 }

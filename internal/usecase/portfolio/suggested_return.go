@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,6 +94,7 @@ func (uc *UseCase) SuggestedReturn(ctx context.Context, email, portfolioID strin
 	returns := uc.holdingReturns(ctx, priced, start, end)
 
 	var totalValue float64
+	monthly := map[string]map[int]float64{}
 	for _, p := range priced {
 		r := returns[p.Symbol]
 		if r.skip != nil {
@@ -101,15 +103,17 @@ func (uc *UseCase) SuggestedReturn(ctx context.Context, email, portfolioID strin
 		}
 		value := p.Shares * prices[p.Symbol]
 		totalValue += value
+		monthly[p.Symbol] = r.monthly
 		out.Holdings = append(out.Holdings, portfoliodomain.SuggestedReturnHolding{
-			Symbol:       p.Symbol,
-			Name:         p.Name,
-			ValueUsd:     value,
-			AnnualReturn: r.cagr,
-			StartDate:    r.first.Format(portfoliodomain.DateLayout),
-			EndDate:      r.last.Format(portfoliodomain.DateLayout),
-			Years:        round2(r.years),
-			ShortHistory: r.first.After(start.Add(fullHistorySlack)),
+			Symbol:           p.Symbol,
+			Name:             p.Name,
+			ValueUsd:         value,
+			AnnualReturn:     r.cagr,
+			AnnualVolatility: annualVolatility(logValues(r.monthly)),
+			StartDate:        r.first.Format(portfoliodomain.DateLayout),
+			EndDate:          r.last.Format(portfoliodomain.DateLayout),
+			Years:            round2(r.years),
+			ShortHistory:     r.first.After(start.Add(fullHistorySlack)),
 		})
 	}
 	sort.SliceStable(out.Skipped, func(i, j int) bool { return out.Skipped[i].Symbol < out.Skipped[j].Symbol })
@@ -119,6 +123,12 @@ func (uc *UseCase) SuggestedReturn(ctx context.Context, email, portfolioID strin
 		out.Note = "None of this portfolio's holdings has a current price and enough price history to suggest a return."
 		return out, nil
 	}
+
+	weights := make(map[string]float64, len(out.Holdings))
+	for _, h := range out.Holdings {
+		weights[h.Symbol] = h.ValueUsd / totalValue
+	}
+	vol := annualVolatility(portfolioMonthlyLogReturns(weights, monthly))
 
 	var annual float64
 	lookback := &portfoliodomain.ReturnLookback{RequestedYears: portfoliodomain.SuggestedReturnLookbackYears}
@@ -148,9 +158,15 @@ func (uc *UseCase) SuggestedReturn(ctx context.Context, email, portfolioID strin
 	out.Available = true
 	out.AnnualReturn = &annual
 	out.Lookback = lookback
+	out.AnnualVolatility = vol
+	var notes []string
 	if lookback.ShortHistory {
-		out.Note = "Some holdings have less than 10 years of price history; their returns use all the history available."
+		notes = append(notes, "Some holdings have less than 10 years of price history; their returns use all the history available.")
 	}
+	if vol == nil {
+		notes = append(notes, "There is not enough shared monthly price history (at least 2 years) to estimate a volatility.")
+	}
+	out.Note = strings.Join(notes, " ")
 	return out, nil
 }
 
@@ -159,7 +175,10 @@ type holdingReturn struct {
 	cagr        float64 // percent
 	years       float64
 	first, last time.Time
-	skip        *portfoliodomain.SkippedHolding
+	// monthly holds the log return of each calendar month, keyed by monthKey of the month
+	// it ends in.
+	monthly map[int]float64
+	skip    *portfoliodomain.SkippedHolding
 }
 
 // holdingReturns fetches each position's closes in [start, end] (at most
@@ -206,6 +225,7 @@ func (uc *UseCase) holdingReturn(ctx context.Context, symbol string, start, end 
 	if r.years < minSuggestedReturnYears {
 		return skip(portfoliodomain.SkipNoHistory, "Less than one year of price history is available.")
 	}
+	r.monthly = monthlyLogReturns(closes)
 	return r
 }
 
@@ -232,6 +252,102 @@ func cagr(closes []dcadomain.HistoricalPrice) (holdingReturn, bool) {
 	years := last.Date.Sub(first.Date).Hours() / 24 / daysPerYear
 	rate := (math.Pow(last.Close/first.Close, 1/years) - 1) * 100
 	return holdingReturn{cagr: rate, years: years, first: first.Date, last: last.Date}, true
+}
+
+// monthKey numbers calendar months consecutively, so adjacent months differ by one.
+func monthKey(t time.Time) int { return t.Year()*12 + int(t.Month()) - 1 }
+
+// monthlyLogReturns takes the last positive close of each calendar month and returns
+// ln(close / previous month's close) for each month whose previous month also has a close,
+// keyed by monthKey. The first month (often partial) only serves as the starting point.
+func monthlyLogReturns(closes []dcadomain.HistoricalPrice) map[int]float64 {
+	type monthEnd struct {
+		date  time.Time
+		close float64
+	}
+	ends := map[int]monthEnd{}
+	for _, c := range closes {
+		if c.Close <= 0 {
+			continue
+		}
+		k := monthKey(c.Date)
+		if e, ok := ends[k]; !ok || c.Date.After(e.date) {
+			ends[k] = monthEnd{date: c.Date, close: c.Close}
+		}
+	}
+	out := make(map[int]float64, len(ends))
+	for k, e := range ends {
+		if prev, ok := ends[k-1]; ok {
+			out[k] = math.Log(e.close / prev.close)
+		}
+	}
+	return out
+}
+
+// portfolioMonthlyLogReturns combines the holdings into one fixed-weight portfolio: for
+// each month every holding has a return for, the weighted sum of the holdings' simple
+// returns, as a log return. Weighting returns rather than volatilities keeps the
+// diversification between holdings that are not perfectly correlated.
+func portfolioMonthlyLogReturns(weights map[string]float64, monthly map[string]map[int]float64) []float64 {
+	var shared []int
+	first := true
+	for sym := range weights {
+		if first {
+			for k := range monthly[sym] {
+				shared = append(shared, k)
+			}
+			first = false
+			continue
+		}
+		kept := shared[:0]
+		for _, k := range shared {
+			if _, ok := monthly[sym][k]; ok {
+				kept = append(kept, k)
+			}
+		}
+		shared = kept
+	}
+	sort.Ints(shared)
+	out := make([]float64, 0, len(shared))
+	for _, k := range shared {
+		var r float64
+		for sym, w := range weights {
+			r += w * math.Expm1(monthly[sym][k])
+		}
+		if r <= -1 {
+			continue // a total loss has no log return
+		}
+		out = append(out, math.Log1p(r))
+	}
+	return out
+}
+
+func logValues(m map[int]float64) []float64 {
+	out := make([]float64, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
+}
+
+// annualVolatility is the sample standard deviation of monthly log returns × √12, in
+// percent rounded to 2 dp. Nil with fewer than MinVolatilityMonths returns.
+func annualVolatility(logReturns []float64) *float64 {
+	n := len(logReturns)
+	if n < portfoliodomain.MinVolatilityMonths {
+		return nil
+	}
+	var mean float64
+	for _, r := range logReturns {
+		mean += r
+	}
+	mean /= float64(n)
+	var ss float64
+	for _, r := range logReturns {
+		ss += (r - mean) * (r - mean)
+	}
+	v := round2(math.Sqrt(ss/float64(n-1)) * math.Sqrt(12) * 100)
+	return &v
 }
 
 func yearsBetweenDates(from, to string) float64 {

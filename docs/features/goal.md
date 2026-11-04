@@ -32,6 +32,7 @@ All endpoints are protected and live under `/api/v1/goals`.
 | `expectedReturn`     | number    | required, annual %, −100 to 100 (0 is valid)                               |
 | `contributionGrowth` | number    | optional, yearly % increase of the monthly amount, −100 to 100             |
 | `inflation`          | number    | optional, annual %, −100 to 100, for today's-money values                  |
+| `volatility`         | number    | optional, annual %, 0 to 100 (0 is valid), for the Monte Carlo (KAN-32)    |
 | `portfolioId`        | string    | optional, one of the user's portfolios; `null` or omitted means no link    |
 
 The response goal has those fields plus `id`, `createdAt` and `updatedAt`. Optional numbers and `portfolioId` are
@@ -47,7 +48,8 @@ The response goal has those fields plus `id`, `createdAt` and `updatedAt`. Optio
 
 ## Data & dependencies
 
-- Table `goals`, migration `000013_create_goals`. Money columns are `NUMERIC(20,2)`, percentages `NUMERIC(9,4)`.
+- Table `goals`, migration `000013_create_goals`; `000014_goal_volatility` adds the nullable `volatility` column
+  (`CHECK 0–100`, existing goals stay `NULL`). Money columns are `NUMERIC(20,2)`, percentages `NUMERIC(9,4)`.
   `user_id` cascades on user delete. `portfolio_id` is `ON DELETE SET NULL`: deleting a portfolio keeps its linked
   goals and clears the link. Indexed on `user_id` and `portfolio_id`.
 - Config: `goal.max_per_user` (default 50), env var `GOAL_MAX_PER_USER`.

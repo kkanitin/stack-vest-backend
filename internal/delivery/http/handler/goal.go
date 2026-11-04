@@ -45,6 +45,7 @@ type goalRequest struct {
 	ExpectedReturn     *float64 `json:"expectedReturn" binding:"required,gte=-100,lte=100"`
 	ContributionGrowth *float64 `json:"contributionGrowth" binding:"omitempty,gte=-100,lte=100"`
 	Inflation          *float64 `json:"inflation" binding:"omitempty,gte=-100,lte=100"`
+	Volatility         *float64 `json:"volatility" binding:"omitempty,gte=0,lte=100"`
 	PortfolioID        *string  `json:"portfolioId" binding:"omitempty,min=1"`
 }
 
@@ -60,6 +61,7 @@ func (r *goalRequest) toGoal() *goaldomain.Goal {
 		ExpectedReturn:     *r.ExpectedReturn,
 		ContributionGrowth: r.ContributionGrowth,
 		Inflation:          r.Inflation,
+		Volatility:         r.Volatility,
 	}
 	if r.StartingAmount != nil {
 		g.StartingAmount = *r.StartingAmount

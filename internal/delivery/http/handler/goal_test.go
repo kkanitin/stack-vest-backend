@@ -177,6 +177,11 @@ func TestGoalHandler_CreateValidation(t *testing.T) {
 		{"someone else's portfolio", `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"portfolioId":"pf-bob"}`, http.StatusBadRequest},
 		{"unknown portfolio", `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"portfolioId":"pf-nope"}`, http.StatusBadRequest},
 		{"malformed JSON", `{"name":`, http.StatusBadRequest},
+		{"volatility null", `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"volatility":null}`, http.StatusCreated},
+		{"volatility 0", `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"volatility":0}`, http.StatusCreated},
+		{"volatility 100", `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"volatility":100}`, http.StatusCreated},
+		{"volatility above 100", `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"volatility":100.5}`, http.StatusBadRequest},
+		{"volatility negative", `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"volatility":-1}`, http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,7 +207,7 @@ func TestGoalHandler_CreateResponseShape(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"id", "portfolioId", "startingAmount", "monthlyAmount", "targetAmount", "expectedReturn", "contributionGrowth", "createdAt"} {
+	for _, key := range []string{"id", "portfolioId", "startingAmount", "monthlyAmount", "targetAmount", "expectedReturn", "contributionGrowth", "volatility", "createdAt"} {
 		if _, ok := raw.Result[key]; !ok {
 			t.Errorf("result is missing %q", key)
 		}
@@ -310,5 +315,43 @@ func TestGoalHandler_OtherUserGets404(t *testing.T) {
 	}
 	if w := doGoal(t, r, http.MethodGet, "/api/v1/goals/does-not-exist", "", ""); w.Code != http.StatusNotFound {
 		t.Fatalf("missing goal: status %d, want 404", w.Code)
+	}
+}
+
+func TestGoalHandler_VolatilityRoundTrip(t *testing.T) {
+	r := newGoalRouter(50)
+	g := createGoal(t, r, `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"volatility":0}`)
+	if g.Volatility == nil || *g.Volatility != 0 {
+		t.Fatalf("create should keep volatility 0 (not drop it): %v", g.Volatility)
+	}
+	path := "/api/v1/goals/" + g.ID
+
+	read := func(method, body string) *goaldomain.Goal {
+		t.Helper()
+		w := doGoal(t, r, method, path, body, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status %d, body %s", method, w.Code, w.Body.String())
+		}
+		var env goalEnvelope
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Result
+	}
+
+	if got := read(http.MethodPut, `{"name":"R","kind":"projection","monthlyAmount":500,"years":30,"expectedReturn":7,"volatility":18.5}`); got.Volatility == nil || *got.Volatility != 18.5 {
+		t.Fatalf("put volatility 18.5: got %v", got.Volatility)
+	}
+	if got := read(http.MethodGet, ""); got.Volatility == nil || *got.Volatility != 18.5 {
+		t.Fatalf("get after put: got %v", got.Volatility)
+	}
+	// PUT replaces every field: leaving volatility out clears it.
+	if got := read(http.MethodPut, projectionBody); got.Volatility != nil {
+		t.Fatalf("put without volatility should clear it, got %v", *got.Volatility)
+	}
+
+	w := doGoal(t, r, http.MethodGet, "/api/v1/goals", "", "")
+	if !strings.Contains(w.Body.String(), `"volatility":null`) {
+		t.Fatalf("list should return the volatility field: %s", w.Body.String())
 	}
 }
