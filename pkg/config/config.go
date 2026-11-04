@@ -61,6 +61,9 @@ type Config struct {
 		// "SYMBOL=Label" entries (parsed by portfolio.ParseBenchmarks).
 		Benchmarks []string `yaml:"benchmarks"`
 	} `yaml:"portfolio"`
+	Goal struct {
+		MaxPerUser int `yaml:"max_per_user"`
+	} `yaml:"goal"`
 }
 
 func Load() *Config {
@@ -79,6 +82,7 @@ func Load() *Config {
 	cfg.Portfolio.MaxPerUser = 10
 	cfg.Portfolio.MaxPositionsPerPortfolio = 20
 	cfg.Portfolio.Benchmarks = []string{"SPY=S&P 500", "QQQ=Nasdaq 100", "VT=Total world"}
+	cfg.Goal.MaxPerUser = 50
 
 	if data, err := os.ReadFile("config.yaml"); err == nil {
 		_ = yaml.Unmarshal(data, cfg)
