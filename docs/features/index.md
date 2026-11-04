@@ -14,7 +14,7 @@ feature-specific rules and gotchas. Repo-wide conventions live in the [documenta
 | [Stocks (market data)](./stock.md)               | `/stocks/search`, `/stocks/price-changes`, `/stocks/history`, `/stocks/:symbol/{quote,price-change,history,profile}` | protected | `usecase/stock`, `infrastructure/fmp`, `infrastructure/cached` |
 | [Popular assets](./popular.md)                   | `GET /popular`                                                                        | public    | `handler/popular.go`                                            |
 | [Watchlist](./watchlist.md)                      | `/watchlist`, `/watchlist/:symbol`, `/watchlist/:symbol/alerts`                       | protected | `domain/watchlist`, `usecase/watchlist`, `repository/watchlist` |
-| [Portfolios & positions](./portfolio.md)         | `/portfolios`, `/portfolios/{summary,history,benchmarks,positions,activity}`, `/portfolios/:id[/positions,/transactions,/summary,/activity]` | protected | `domain/portfolio`, `usecase/portfolio`, `repository/portfolio`, `infrastructure/cached`, `pkg/worker` |
+| [Portfolios & positions](./portfolio.md)         | `/portfolios`, `/portfolios/{summary,history,benchmarks,positions,activity}`, `/portfolios/:id[/positions,/transactions,/summary,/activity,/suggested-return]` | protected | `domain/portfolio`, `usecase/portfolio`, `repository/portfolio`, `infrastructure/cached`, `pkg/worker` |
 | [AI portfolio analysis (SSE)](./portfolio-analysis.md) | `POST /portfolios/analyze`, `POST /portfolios/:id/analyze`                      | protected | `usecase/analysis`, `infrastructure/groq`                       |
 | [DCA simulator](./dca.md)                        | `POST /dca/{simulate,compare,holdings}`                                               | protected | `domain/dca`, `usecase/dca`, `infrastructure/cached`            |
 | [Market sentiment](./sentiment.md)               | `GET /sentiment`                                                                      | protected | `domain/sentiment`, `usecase/sentiment`                         |
@@ -33,6 +33,8 @@ warm). Database pool stats (`maxConns`, `totalConns`, `idleConns`, `acquireCount
 - **Pricing:** portfolio uses the shared cached `Quoter` and `PriceChanger` from [stock.md](./stock.md), wrapped once in `main.go`.
 - **Holdings:** dividend and portfolio analysis read positions from the portfolio repository and use case. The dividend
   calendar also reads the portfolio transaction ledger (`ListTransactionsByUser`) for the shares held at past ex-dates.
+- **Long daily closes:** the portfolio suggested return reads ten-year closes through the DCA price source
+  (`cached.DCAPrices`, shared with [dca.md](./dca.md)).
 - **Daily closes:** portfolio benchmarks and time-weighted returns share the cached `HistoryCloser` (see [stock.md](./stock.md)).
 - **Goals → portfolios:** a goal may link to one of the user's portfolios (checked with the portfolio repository's
   `GetPortfolio`). Deleting the portfolio clears `goals.portfolio_id` (`ON DELETE SET NULL`) and keeps the goal.

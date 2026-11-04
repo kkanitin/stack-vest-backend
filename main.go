@@ -120,7 +120,10 @@ func main() {
 
 	// Adjusted closes for the simulator: reused for 6 hours per symbol and range, so tweaking
 	// the amount or frequency does not hit the provider again (see docs/features/dca.md).
-	dcaSimulatorUC := dcauc.NewSimulatorUseCase(cached.NewDCAPrices(avClient, 6*time.Hour))
+	// Also the source of the portfolio suggested return's ten-year closes (see
+	// docs/features/portfolio.md), so both features share one cache.
+	dcaPrices := cached.NewDCAPrices(avClient, 6*time.Hour)
+	dcaSimulatorUC := dcauc.NewSimulatorUseCase(dcaPrices)
 	dcaHandler := handler.NewDCAHandler(dcaSimulatorUC)
 
 	groqClient := groq.NewClient(cfg.ThirdPartyAPI.Groq.APIKey)
@@ -131,7 +134,8 @@ func main() {
 	// docs/features/portfolio.md). Closes only move once a day, so 6 hours is plenty fresh.
 	cachedHistory := cached.NewHistoryCloser(avClient, 6*time.Hour)
 	portfolioUC := portfoliouc.New(portfolioRepo, userRepo, cachedQuoter, cachedPriceChanger, cfg.Portfolio.MaxPerUser, cfg.Portfolio.MaxPositionsPerPortfolio).
-		WithBenchmarks(cachedHistory, portfoliodomain.ParseBenchmarks(cfg.Portfolio.Benchmarks))
+		WithBenchmarks(cachedHistory, portfoliodomain.ParseBenchmarks(cfg.Portfolio.Benchmarks)).
+		WithLongHistory(dcaPrices)
 	portfolioHandler := handler.NewPortfolioHandler(portfolioUC, analyzeUC)
 
 	// Records every user's total holdings value for the current UTC day: once at

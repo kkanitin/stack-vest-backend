@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	dcadomain "github.com/kanitin/stackvest/backend/internal/domain/dca"
 	portfoliodomain "github.com/kanitin/stackvest/backend/internal/domain/portfolio"
 	stockdomain "github.com/kanitin/stackvest/backend/internal/domain/stock"
 	userdomain "github.com/kanitin/stackvest/backend/internal/domain/user"
@@ -28,6 +29,9 @@ type UseCase struct {
 	// Benchmark overlay for GetValueHistory; set by WithBenchmarks (see benchmark.go).
 	benchmarkFetcher stockdomain.HistoryFetcher
 	benchmarks       []portfoliodomain.Benchmark
+
+	// Long daily-close history for SuggestedReturn; set by WithLongHistory (see suggested_return.go).
+	longHistory dcadomain.PriceFetcher
 }
 
 func New(
