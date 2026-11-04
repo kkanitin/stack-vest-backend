@@ -54,6 +54,7 @@ func (h *PortfolioHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	pf.DELETE("/:id/transactions/:txId", h.deleteTransaction)
 	pf.GET("/:id/summary", h.getSummary)
 	pf.GET("/:id/activity", h.getActivity)
+	pf.GET("/:id/suggested-return", h.getSuggestedReturn)
 	pf.POST("/:id/analyze", h.analyzePortfolio)
 }
 
@@ -429,6 +430,27 @@ func (h *PortfolioHandler) getSummary(c *gin.Context) {
 		return
 	}
 	response.OK(c, summary)
+}
+
+// getSuggestedReturn suggests an expected annual return from the portfolio's holdings.
+// A portfolio with nothing usable answers 200 with available=false, not an error.
+func (h *PortfolioHandler) getSuggestedReturn(c *gin.Context) {
+	id := c.Param("id")
+	email := c.GetString(middleware.EmailKey)
+	result, err := h.uc.SuggestedReturn(c.Request.Context(), email, id, time.Now().UTC())
+	if errors.Is(err, portfoliodomain.ErrPortfolioNotFound) {
+		response.Err(c, http.StatusNotFound, "portfolio not found")
+		return
+	}
+	if err != nil {
+		zap.L().Error(
+			"failed to suggest return", logger.RequestID(c.Request.Context()), zap.String("email", email),
+			zap.String("id", id), zap.Error(err),
+		)
+		response.Err(c, http.StatusInternalServerError, "failed to suggest return")
+		return
+	}
+	response.OK(c, result)
 }
 
 func (h *PortfolioHandler) getActivity(c *gin.Context) {

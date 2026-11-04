@@ -40,6 +40,9 @@ be simulated and a provider failure was involved.
   misses share one fetch; errors are not cached, so the next request retries. Results are identical to an uncached call.
   `HistoryCloser` is not used here: it caches plain closes over a five-year window, the simulator needs a different price basis
   over up to 30 years.
+- **Shared price cache:** the same `cached.DCAPrices` instance also serves the portfolio suggested return's ten-year
+  closes (see [portfolio.md](./portfolio.md#suggested-return)), so both features share its entries and its 500-entry
+  bound.
 - **Handler validation:**
   - Dates must be `YYYY-MM-DD`.
   - `endDate` can't be in the future, and `startDate < endDate`.

@@ -34,6 +34,7 @@ All endpoints are protected and live under `/api/v1/portfolios`.
 | DELETE | `/:id/transactions/:txId` | —                                               | `204` · `404` · `409` would leave a later sell uncovered         |
 | GET    | `/:id/summary`            | —                                               | `{ totalValue, change30d, changePct30d, realisedPnl, unrealisedPnl }` |
 | GET    | `/:id/activity`           | `limit` 1–50 (default 10)                       | ledger activity rows, newest first                               |
+| GET    | `/:id/suggested-return`   | —                                               | `{ available, annualReturn, lookback, holdings, skipped, note?, priceBasisNote }` · `404`. See [Suggested return](#suggested-return) |
 
 ## Code map
 
@@ -46,7 +47,10 @@ All endpoints are protected and live under `/api/v1/portfolios`.
   `ErrNotFound`, `ErrPortfolioEmpty`, `ErrPricingUnavailable`, `ErrUnknownBenchmark`)
 - Use case: `internal/usecase/portfolio/portfolio.go`, and `snapshot.go` for the value snapshot and its history,
   `transactions.go` for the ledger use cases, `returns.go` for the daily series and the time-weighted return,
-  `benchmark.go` for the benchmark overlay (`WithBenchmarks`, `Benchmarks`, `alignBenchmark`)
+  `benchmark.go` for the benchmark overlay (`WithBenchmarks`, `Benchmarks`, `alignBenchmark`),
+  `suggested_return.go` for the suggested return (`WithLongHistory`, `SuggestedReturn`, `cagr`)
+- Domain: `internal/domain/portfolio/suggested_return.go` (`SuggestedReturn`, `ReturnLookback`,
+  `SuggestedReturnHolding`, `SkippedHolding`, `SuggestedReturnLookbackYears`, the `Skip*` codes)
 - Index closes: `internal/infrastructure/cached/history.go` (`cached.HistoryCloser`)
 - Repository: `internal/repository/portfolio/postgres.go`
 - Handler: `internal/delivery/http/handler/portfolio.go`, and `portfolio_transactions.go` for the transaction routes
@@ -67,6 +71,8 @@ All endpoints are protected and live under `/api/v1/portfolios`.
 - Pricing uses the shared cached `Quoter` and `PriceChanger` (see [stock.md](./stock.md)). The returns use the
   cached 5-year daily closes (`cached.HistoryCloser`, the same fetcher as the benchmark overlay; see
   [Returns](#returns-time-weighted)).
+- The suggested return reads up to ten years of plain daily closes through the DCA price source
+  (`dca.PriceFetcher`, the same `cached.DCAPrices` instance as the simulator; see [dca.md](./dca.md)).
 
 ## Rules & gotchas
 
@@ -296,6 +302,40 @@ exactly the plain history (no new fields).
   call serves every range. TTL is 6 hours. Concurrent misses are coalesced into one fetch (`cache.Keyed`). Errors are
   **not** cached, so the next request retries. Closes before the five-year window are never served.
 
+## Suggested return
+
+`GET /:id/suggested-return` suggests an expected annual return for a goal linked to the portfolio, from what it holds
+now (KAN-16).
+
+- **Per holding:** every **open** holding (`shares > 0`) gets the CAGR of its daily closes,
+  `(last / first)^(1 / years) − 1`, with `years = days / 365.25` between the first and last close in the window.
+- **Combined:** `annualReturn` is the average of those CAGRs weighted by current value (`shares × live quote`),
+  over the included holdings only, so skipped holdings drop out and the rest renormalise to 100%.
+- **Lookback:** `[today − 10 years, today]` (UTC). A holding with less history uses all it has and is flagged
+  `shortHistory` (its first close is more than 7 days after the window start). A holding with **under one year** of
+  history is skipped as `no_history`, since annualising a few weeks gives meaningless figures
+  (`minSuggestedReturnYears`).
+- **Price basis:** plain closes (split-adjusted, no dividends), the same basis as the DCA simulator.
+- **Response** (`result`):
+  - `available` (bool) and `annualReturn` (% rounded to 2 dp, `null` when not available).
+  - `lookback: { startDate, endDate, years, requestedYears: 10, shortHistory }` spans the earliest holding start to
+    the latest holding end, `null` when not available.
+  - `holdings: [{ symbol, name, valueUsd, weightPct, annualReturn, startDate, endDate, years, shortHistory }]`, largest
+    value first.
+  - `skipped: [{ symbol, code, reason }]`, sorted by symbol. `code` is `no_price` (no live quote), `no_history` (no
+    history, or under a year) or `history_unavailable` (provider failure, logged as a warning, or no fetcher).
+  - `note` explains a missing suggestion or short histories. `priceBasisNote` says dividends are excluded.
+- **No suggestion is not an error:** an empty portfolio, or one where nothing is both priced and has history, answers
+  `200` with `available: false`, empty `holdings`, the `skipped` list and a `note`. Only a missing or foreign
+  portfolio is `404`, and an unexpected repository error is `500`.
+- **Cost:** one quote per holding (the 30-second quote cache) and one ten-year history fetch per priced holding, at
+  most 4 at once (`suggestedReturnConcurrency`). The fetch window is whole UTC days, so `cached.DCAPrices` (6-hour TTL,
+  keyed by symbol and exact dates) serves repeats on the same day.
+- **Wiring:** `main.go` calls `WithLongHistory(dcaPrices)` on the use case. Without it every holding is skipped as
+  `history_unavailable`.
+- **Weighting caveat:** weights are today's values and each CAGR is the asset's own past growth, so this is a
+  backward-looking estimate, not a forecast.
+
 ## Rollout
 
 Deploy the **backend first, then the frontend**. `POST /:id/positions` keeps working, so older clients can still add
@@ -306,6 +346,7 @@ runs at startup and creates the opening entries.
 
 `handler/portfolio_test.go`, `handler/portfolio_transactions_test.go`, `usecase/portfolio/portfolio_test.go`,
 `usecase/portfolio/transactions_test.go`, `usecase/portfolio/returns_test.go`, `usecase/portfolio/snapshot_test.go`,
-`usecase/portfolio/benchmark_test.go`, `domain/portfolio/portfolio_test.go`, `domain/portfolio/ledger_test.go`,
+`usecase/portfolio/benchmark_test.go`, `usecase/portfolio/suggested_return_test.go`,
+`handler/portfolio_suggested_return_test.go`, `domain/portfolio/portfolio_test.go`, `domain/portfolio/ledger_test.go`,
 `domain/portfolio/returns_test.go`,
 `infrastructure/cached/history_test.go`, `pkg/config/config_test.go`, `pkg/worker/periodic_test.go`
