@@ -41,13 +41,14 @@ func mapWriteErr(err error) error {
 }
 
 const goalColumns = `id, user_id, portfolio_id, name, kind, currency, starting_amount, monthly_amount,
-	target_amount, years, expected_return, contribution_growth, inflation, created_at, updated_at`
+	target_amount, years, expected_return, contribution_growth, inflation, volatility, created_at, updated_at`
 
 func scanGoal(row pgx.Row) (*goaldomain.Goal, error) {
 	var g goaldomain.Goal
 	err := row.Scan(
 		&g.ID, &g.UserID, &g.PortfolioID, &g.Name, &g.Kind, &g.Currency, &g.StartingAmount, &g.MonthlyAmount,
-		&g.TargetAmount, &g.Years, &g.ExpectedReturn, &g.ContributionGrowth, &g.Inflation, &g.CreatedAt, &g.UpdatedAt,
+		&g.TargetAmount, &g.Years, &g.ExpectedReturn, &g.ContributionGrowth, &g.Inflation, &g.Volatility, &g.CreatedAt,
+		&g.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -84,11 +85,11 @@ func (r *PostgresRepository) Create(ctx context.Context, g *goaldomain.Goal, max
 
 	created, err := scanGoal(tx.QueryRow(ctx,
 		`INSERT INTO stackvest.goals (user_id, portfolio_id, name, kind, currency, starting_amount, monthly_amount,
-		     target_amount, years, expected_return, contribution_growth, inflation)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		     target_amount, years, expected_return, contribution_growth, inflation, volatility)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 RETURNING `+goalColumns,
 		g.UserID, g.PortfolioID, g.Name, g.Kind, g.Currency, g.StartingAmount, g.MonthlyAmount,
-		g.TargetAmount, g.Years, g.ExpectedReturn, g.ContributionGrowth, g.Inflation,
+		g.TargetAmount, g.Years, g.ExpectedReturn, g.ContributionGrowth, g.Inflation, g.Volatility,
 	))
 	if err != nil {
 		return nil, mapWriteErr(err)
@@ -119,8 +120,8 @@ func (r *PostgresRepository) ListByUser(ctx context.Context, userID string, limi
 		var g goaldomain.Goal
 		if err := rows.Scan(
 			&g.ID, &g.UserID, &g.PortfolioID, &g.Name, &g.Kind, &g.Currency, &g.StartingAmount, &g.MonthlyAmount,
-			&g.TargetAmount, &g.Years, &g.ExpectedReturn, &g.ContributionGrowth, &g.Inflation, &g.CreatedAt,
-			&g.UpdatedAt, &total,
+			&g.TargetAmount, &g.Years, &g.ExpectedReturn, &g.ContributionGrowth, &g.Inflation, &g.Volatility,
+			&g.CreatedAt, &g.UpdatedAt, &total,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -151,11 +152,11 @@ func (r *PostgresRepository) Update(ctx context.Context, g *goaldomain.Goal) (*g
 		`UPDATE stackvest.goals
 		 SET portfolio_id = $3, name = $4, kind = $5, currency = $6, starting_amount = $7, monthly_amount = $8,
 		     target_amount = $9, years = $10, expected_return = $11, contribution_growth = $12, inflation = $13,
-		     updated_at = NOW()
+		     volatility = $14, updated_at = NOW()
 		 WHERE id = $1 AND user_id = $2
 		 RETURNING `+goalColumns,
 		g.ID, g.UserID, g.PortfolioID, g.Name, g.Kind, g.Currency, g.StartingAmount, g.MonthlyAmount,
-		g.TargetAmount, g.Years, g.ExpectedReturn, g.ContributionGrowth, g.Inflation,
+		g.TargetAmount, g.Years, g.ExpectedReturn, g.ContributionGrowth, g.Inflation, g.Volatility,
 	))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, goaldomain.ErrGoalNotFound

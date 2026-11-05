@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,5 +257,164 @@ func TestSuggestedReturn_NotOwned(t *testing.T) {
 	}
 	if !history.from.IsZero() {
 		t.Fatal("no price history should be fetched for a portfolio the user does not own")
+	}
+}
+
+// monthlySeries returns one close at the middle of each month from fromMonth (YYYY-MM)
+// onwards, the first at 100 and each next one multiplied by the matching factor.
+func monthlySeries(fromMonth string, factors ...float64) []dcadomain.HistoricalPrice {
+	start := day(fromMonth + "-15")
+	out := []dcadomain.HistoricalPrice{{Date: start, Close: 100}}
+	c := 100.0
+	for i, f := range factors {
+		c *= f
+		out = append(out, dcadomain.HistoricalPrice{Date: start.AddDate(0, i+1, 0), Close: c})
+	}
+	return out
+}
+
+// alternating gives n factors that go up by f, then back down by 1/f, and so on.
+func alternating(n int, f float64) []float64 {
+	out := make([]float64, n)
+	for i := range out {
+		if i%2 == 0 {
+			out[i] = f
+		} else {
+			out[i] = 1 / f
+		}
+	}
+	return out
+}
+
+// sampleVol is the expected annualised volatility (percent) of the given monthly factors.
+func sampleVol(factors []float64) float64 {
+	var mean float64
+	for _, f := range factors {
+		mean += math.Log(f)
+	}
+	mean /= float64(len(factors))
+	var ss float64
+	for _, f := range factors {
+		d := math.Log(f) - mean
+		ss += d * d
+	}
+	return math.Sqrt(ss/float64(len(factors)-1)) * math.Sqrt(12) * 100
+}
+
+func TestSuggestedReturn_VolatilitySingleHoldingMatchesHolding(t *testing.T) {
+	factors := alternating(48, 1.05)
+	history := &stubLongHistory{closes: map[string][]dcadomain.HistoricalPrice{
+		"AAA": monthlySeries("2022-06", factors...),
+	}}
+	uc, _ := srUseCase([]*portfoliodomain.Position{{Symbol: "AAA", Shares: 1}}, map[string]float64{"AAA": 100}, history, "u1")
+
+	got, err := uc.SuggestedReturn(context.Background(), "a@b.com", "pf1", srNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.AnnualVolatility == nil || got.Holdings[0].AnnualVolatility == nil {
+		t.Fatalf("expected a volatility, got %+v", got)
+	}
+	want := sampleVol(factors)
+	if !near(*got.AnnualVolatility, want, 0.01) {
+		t.Fatalf("annualVolatility = %v, want ≈ %v", *got.AnnualVolatility, want)
+	}
+	if *got.AnnualVolatility != *got.Holdings[0].AnnualVolatility {
+		t.Fatalf("portfolio %v must equal its only holding %v", *got.AnnualVolatility, *got.Holdings[0].AnnualVolatility)
+	}
+}
+
+func TestSuggestedReturn_VolatilityCountsCorrelation(t *testing.T) {
+	up := alternating(48, 1.05)
+	down := make([]float64, len(up))
+	for i, f := range up {
+		down[i] = 1 / f
+	}
+	tests := []struct {
+		name        string
+		a, b        []float64
+		lowerThanBy float64 // portfolio must be at least this much below the holding average
+	}{
+		{"moving together", up, up, 0},
+		{"moving opposite", up, down, 10},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			history := &stubLongHistory{closes: map[string][]dcadomain.HistoricalPrice{
+				"AAA": monthlySeries("2022-06", tc.a...),
+				"BBB": monthlySeries("2022-06", tc.b...),
+			}}
+			positions := []*portfoliodomain.Position{{Symbol: "AAA", Shares: 1}, {Symbol: "BBB", Shares: 1}}
+			uc, _ := srUseCase(positions, map[string]float64{"AAA": 100, "BBB": 100}, history, "u1")
+
+			got, err := uc.SuggestedReturn(context.Background(), "a@b.com", "pf1", srNow)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.AnnualVolatility == nil {
+				t.Fatalf("expected a volatility, got %+v", got)
+			}
+			holdingVol := sampleVol(tc.a)
+			for _, h := range got.Holdings {
+				if h.AnnualVolatility == nil || !near(*h.AnnualVolatility, holdingVol, 0.01) {
+					t.Fatalf("%s volatility = %v, want ≈ %v", h.Symbol, h.AnnualVolatility, holdingVol)
+				}
+			}
+			if tc.lowerThanBy == 0 {
+				if !near(*got.AnnualVolatility, holdingVol, 0.01) {
+					t.Fatalf("perfectly correlated holdings: portfolio %v, want ≈ %v", *got.AnnualVolatility, holdingVol)
+				}
+				return
+			}
+			if *got.AnnualVolatility > holdingVol-tc.lowerThanBy {
+				t.Fatalf("offsetting holdings: portfolio %v should be far below the holdings' %v", *got.AnnualVolatility, holdingVol)
+			}
+		})
+	}
+}
+
+func TestSuggestedReturn_VolatilityNeedsTwoYears(t *testing.T) {
+	// 18 monthly returns over 1.5 years: enough for a return, too few for a volatility.
+	history := &stubLongHistory{closes: map[string][]dcadomain.HistoricalPrice{
+		"AAA": monthlySeries("2024-12", alternating(18, 1.05)...),
+	}}
+	uc, _ := srUseCase([]*portfoliodomain.Position{{Symbol: "AAA", Shares: 1}}, map[string]float64{"AAA": 100}, history, "u1")
+
+	got, err := uc.SuggestedReturn(context.Background(), "a@b.com", "pf1", srNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.Available || got.AnnualReturn == nil {
+		t.Fatalf("the return should still be suggested: %+v", got)
+	}
+	if got.AnnualVolatility != nil || got.Holdings[0].AnnualVolatility != nil {
+		t.Fatalf("volatility should be null with 18 months, got %v / %v", got.AnnualVolatility, got.Holdings[0].AnnualVolatility)
+	}
+	if !strings.Contains(got.Note, "volatility") {
+		t.Fatalf("note should explain the missing volatility: %q", got.Note)
+	}
+}
+
+func TestSuggestedReturn_VolatilityUsesSharedMonths(t *testing.T) {
+	// OLD has four years of months, NEW only 18: they share too few months for a portfolio
+	// volatility, though OLD still gets its own.
+	history := &stubLongHistory{closes: map[string][]dcadomain.HistoricalPrice{
+		"OLD": monthlySeries("2022-06", alternating(48, 1.05)...),
+		"NEW": monthlySeries("2024-12", alternating(18, 1.05)...),
+	}}
+	positions := []*portfoliodomain.Position{{Symbol: "OLD", Shares: 1}, {Symbol: "NEW", Shares: 1}}
+	uc, _ := srUseCase(positions, map[string]float64{"OLD": 100, "NEW": 100}, history, "u1")
+
+	got, err := uc.SuggestedReturn(context.Background(), "a@b.com", "pf1", srNow)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.AnnualVolatility != nil {
+		t.Fatalf("portfolio volatility should be null, got %v", *got.AnnualVolatility)
+	}
+	for _, h := range got.Holdings {
+		if (h.Symbol == "OLD") != (h.AnnualVolatility != nil) {
+			t.Fatalf("%s volatility = %v", h.Symbol, h.AnnualVolatility)
+		}
 	}
 }

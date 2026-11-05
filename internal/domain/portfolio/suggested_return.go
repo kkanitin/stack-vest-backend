@@ -4,6 +4,10 @@ package portfolio
 // its annualised return. A holding with less history uses all it has.
 const SuggestedReturnLookbackYears = 10
 
+// MinVolatilityMonths is the fewest monthly returns a volatility is worked out from. With
+// less, the volatility is null: a handful of months gives a figure too noisy to simulate on.
+const MinVolatilityMonths = 24
+
 // Codes for a holding left out of a suggested return.
 const (
 	// SkipNoPrice: no live quote, so the holding has no current value to weight by.
@@ -23,8 +27,13 @@ const (
 type SuggestedReturn struct {
 	Available bool `json:"available"`
 	// AnnualReturn is the value-weighted average of the holdings' CAGRs, in percent.
-	AnnualReturn *float64        `json:"annualReturn"`
-	Lookback     *ReturnLookback `json:"lookback"`
+	AnnualReturn *float64 `json:"annualReturn"`
+	// AnnualVolatility is the annualised standard deviation (percent) of the portfolio's
+	// monthly log returns, the holdings weighted by today's value, over the months every
+	// included holding has. Nil when there is no suggestion or fewer than
+	// MinVolatilityMonths shared monthly returns.
+	AnnualVolatility *float64        `json:"annualVolatility"`
+	Lookback         *ReturnLookback `json:"lookback"`
 	// Holdings are the holdings used, in descending weight order.
 	Holdings []SuggestedReturnHolding `json:"holdings"`
 	Skipped  []SkippedHolding         `json:"skipped"`
@@ -46,17 +55,19 @@ type ReturnLookback struct {
 
 // SuggestedReturnHolding is one holding's contribution. WeightPct is its share (0-100) of
 // the value of the included holdings; AnnualReturn is its CAGR in percent over
-// [StartDate, EndDate].
+// [StartDate, EndDate]. AnnualVolatility is its own annualised volatility in percent, nil
+// with fewer than MinVolatilityMonths monthly returns.
 type SuggestedReturnHolding struct {
-	Symbol       string  `json:"symbol"`
-	Name         string  `json:"name"`
-	ValueUsd     float64 `json:"valueUsd"`
-	WeightPct    float64 `json:"weightPct"`
-	AnnualReturn float64 `json:"annualReturn"`
-	StartDate    string  `json:"startDate"`
-	EndDate      string  `json:"endDate"`
-	Years        float64 `json:"years"`
-	ShortHistory bool    `json:"shortHistory"`
+	Symbol           string   `json:"symbol"`
+	Name             string   `json:"name"`
+	ValueUsd         float64  `json:"valueUsd"`
+	WeightPct        float64  `json:"weightPct"`
+	AnnualReturn     float64  `json:"annualReturn"`
+	AnnualVolatility *float64 `json:"annualVolatility"`
+	StartDate        string   `json:"startDate"`
+	EndDate          string   `json:"endDate"`
+	Years            float64  `json:"years"`
+	ShortHistory     bool     `json:"shortHistory"`
 }
 
 // SkippedHolding is a holding left out of the suggestion. Code is one of the Skip*

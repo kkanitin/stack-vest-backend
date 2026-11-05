@@ -34,7 +34,7 @@ All endpoints are protected and live under `/api/v1/portfolios`.
 | DELETE | `/:id/transactions/:txId` | —                                               | `204` · `404` · `409` would leave a later sell uncovered         |
 | GET    | `/:id/summary`            | —                                               | `{ totalValue, change30d, changePct30d, realisedPnl, unrealisedPnl }` |
 | GET    | `/:id/activity`           | `limit` 1–50 (default 10)                       | ledger activity rows, newest first                               |
-| GET    | `/:id/suggested-return`   | —                                               | `{ available, annualReturn, lookback, holdings, skipped, note?, priceBasisNote }` · `404`. See [Suggested return](#suggested-return) |
+| GET    | `/:id/suggested-return`   | —                                               | `{ available, annualReturn, annualVolatility, lookback, holdings, skipped, note?, priceBasisNote }` · `404`. See [Suggested return](#suggested-return) |
 
 ## Code map
 
@@ -48,9 +48,10 @@ All endpoints are protected and live under `/api/v1/portfolios`.
 - Use case: `internal/usecase/portfolio/portfolio.go`, and `snapshot.go` for the value snapshot and its history,
   `transactions.go` for the ledger use cases, `returns.go` for the daily series and the time-weighted return,
   `benchmark.go` for the benchmark overlay (`WithBenchmarks`, `Benchmarks`, `alignBenchmark`),
-  `suggested_return.go` for the suggested return (`WithLongHistory`, `SuggestedReturn`, `cagr`)
+  `suggested_return.go` for the suggested return (`WithLongHistory`, `SuggestedReturn`, `cagr`,
+  `monthlyLogReturns`, `portfolioMonthlyLogReturns`, `annualVolatility`)
 - Domain: `internal/domain/portfolio/suggested_return.go` (`SuggestedReturn`, `ReturnLookback`,
-  `SuggestedReturnHolding`, `SkippedHolding`, `SuggestedReturnLookbackYears`, the `Skip*` codes)
+  `SuggestedReturnHolding`, `SkippedHolding`, `SuggestedReturnLookbackYears`, `MinVolatilityMonths`, the `Skip*` codes)
 - Index closes: `internal/infrastructure/cached/history.go` (`cached.HistoryCloser`)
 - Repository: `internal/repository/portfolio/postgres.go`
 - Handler: `internal/delivery/http/handler/portfolio.go`, and `portfolio_transactions.go` for the transaction routes
@@ -315,16 +316,27 @@ now (KAN-16).
   `shortHistory` (its first close is more than 7 days after the window start). A holding with **under one year** of
   history is skipped as `no_history`, since annualising a few weeks gives meaningless figures
   (`minSuggestedReturnYears`).
+- **Volatility (KAN-31):** for the goal Monte Carlo. Each holding's closes become monthly log returns: the last
+  close of each calendar month, `ln(close / previous month's close)`, only between adjacent months (the first,
+  usually partial, month is just the starting point). A holding's own `annualVolatility` is the sample standard
+  deviation of its monthly log returns `× √12`, in percent (2 dp). The **portfolio** `annualVolatility` is worked out
+  from the portfolio's monthly returns, not by averaging the holdings' volatilities: for each month that **every**
+  included holding has a return for, `ln(1 + Σ weight × (e^r − 1))` with today's value weights, then the same standard
+  deviation `× √12`. That keeps the diversification between holdings that do not move together. With fewer than
+  **24** monthly returns (`MinVolatilityMonths`), the volatility is `null` and `note` says so; the return is still
+  suggested.
 - **Price basis:** plain closes (split-adjusted, no dividends), the same basis as the DCA simulator.
 - **Response** (`result`):
   - `available` (bool) and `annualReturn` (% rounded to 2 dp, `null` when not available).
+  - `annualVolatility` (% a year, 2 dp), `null` when not available or with under 24 shared monthly returns.
   - `lookback: { startDate, endDate, years, requestedYears: 10, shortHistory }` spans the earliest holding start to
     the latest holding end, `null` when not available.
-  - `holdings: [{ symbol, name, valueUsd, weightPct, annualReturn, startDate, endDate, years, shortHistory }]`, largest
+  - `holdings: [{ symbol, name, valueUsd, weightPct, annualReturn, annualVolatility, startDate, endDate, years,
+    shortHistory }]`, largest
     value first.
   - `skipped: [{ symbol, code, reason }]`, sorted by symbol. `code` is `no_price` (no live quote), `no_history` (no
     history, or under a year) or `history_unavailable` (provider failure, logged as a warning, or no fetcher).
-  - `note` explains a missing suggestion or short histories. `priceBasisNote` says dividends are excluded.
+  - `note` explains a missing suggestion, short histories or a missing volatility. `priceBasisNote` says dividends are excluded.
 - **No suggestion is not an error:** an empty portfolio, or one where nothing is both priced and has history, answers
   `200` with `available: false`, empty `holdings`, the `skipped` list and a `note`. Only a missing or foreign
   portfolio is `404`, and an unexpected repository error is `500`.
